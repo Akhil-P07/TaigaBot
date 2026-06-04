@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 
@@ -27,6 +28,7 @@ from utils import guildutils as gu
 from utils.checks import is_eboard
 
 NEW_CATEGORY_SENTINEL = "__new__"
+EMOJI_TIMEOUT = 60  # seconds to react with the join emoji during /createproject
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -49,6 +51,41 @@ def _norm_tags(raw: str) -> str:
         if t and t not in seen:
             seen.append(t)
     return ",".join(seen)
+
+
+def _distinct_tags(rows) -> list[str]:
+    """Sorted list of every unique tag across the given project rows."""
+    tags: set[str] = set()
+    for row in rows:
+        for t in (row["tags"] or "").split(","):
+            t = t.strip().lower()
+            if t:
+                tags.add(t)
+    return sorted(tags)
+
+
+def _build_projects_embed(guild: discord.Guild, rows, tag: str | None) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"🗂️ Projects{f' — #{tag}' if tag else ''}",
+        color=discord.Color(config.BOT_COLOR),
+        description=f"{len(rows)} project(s)" + (" found." if tag else "."),
+    )
+    for row in rows[:15]:
+        tags_str = _fmt_tags(row["tags"]) if row["tags"] else "—"
+        channel = guild.get_channel(row["channel_id"])
+        ch_ref = channel.mention if channel else f"`#{_channel_name(row['name'])}`"
+        embed.add_field(
+            name=row["name"],
+            value=(
+                f"{row['description'][:120]}\n"
+                f"**Lead:** <@{row['lead_id']}> | **Channel:** {ch_ref}\n"
+                f"**Tags:** {tags_str}"
+            ),
+            inline=False,
+        )
+    if len(rows) > 15:
+        embed.set_footer(text=f"Showing 15 of {len(rows)}.")
+    return embed
 
 
 # ── Persistent approval buttons (survive bot restarts) ───────────────────────
@@ -262,47 +299,20 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         required=False,
         max_length=100,
     )
-    lead_id = discord.ui.TextInput(
-        label="Team lead Discord ID",
-        placeholder="Right-click member → Copy User ID (Developer Mode on)",
-        max_length=25,
-    )
-    emoji = discord.ui.TextInput(
-        label="Reaction emoji (for #roles)",
-        placeholder="e.g. 🤖",
-        max_length=50,
-    )
 
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, lead: discord.Member):
         super().__init__()
         self.bot = bot
+        self.lead = lead  # passed in from the slash command (a real mention)
 
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
-
-        lead_id_str = self.lead_id.value.strip()
-        if not lead_id_str.isdigit():
-            await interaction.response.send_message(
-                "❌ Team lead ID must be a numeric Discord user ID.", ephemeral=True
-            )
-            return
-        lead = guild.get_member(int(lead_id_str))
-        if lead is None:
-            try:
-                lead = await guild.fetch_member(int(lead_id_str))
-            except discord.NotFound:
-                await interaction.response.send_message(
-                    f"❌ No member with ID `{lead_id_str}` found in this server.",
-                    ephemeral=True,
-                )
-                return
-
         tags_fmt = _fmt_tags(self.tags.value or "")
         view = _CategoryView(guild.categories)
         await interaction.response.send_message(
             f"**Project:** {self.project_name.value}\n"
             f"**Tags:** {tags_fmt or 'none'}\n"
-            f"**Lead:** {lead.mention}\n\n"
+            f"**Lead:** {self.lead.mention}\n\n"
             "Where should the project channel go?",
             view=view,
             ephemeral=True,
@@ -311,7 +321,35 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         if not view.confirmed:
             return
 
-        await self._create(interaction, guild, lead, view.category_value)
+        await self._create(interaction, guild, self.lead, view.category_value)
+
+    async def _capture_emoji(self, interaction: discord.Interaction, name: str) -> str | None:
+        """Ask the creator to react with the join emoji — this opens Discord's
+        real emoji picker (modals can't). Returns the emoji string, or None on
+        timeout. Posts a temporary prompt in the command channel."""
+        prompt = await interaction.channel.send(
+            f"{interaction.user.mention} — react to **this message** with the emoji "
+            f"members will use to join **{name}** (you have {EMOJI_TIMEOUT}s)."
+        )
+
+        def check(payload: discord.RawReactionActionEvent) -> bool:
+            return (
+                payload.message_id == prompt.id
+                and payload.user_id == interaction.user.id
+            )
+
+        try:
+            payload = await self.bot.wait_for(
+                "raw_reaction_add", check=check, timeout=EMOJI_TIMEOUT
+            )
+            emoji = str(payload.emoji)
+        except asyncio.TimeoutError:
+            emoji = None
+        try:
+            await prompt.delete()
+        except discord.HTTPException:
+            pass
+        return emoji
 
     async def _create(
         self,
@@ -323,8 +361,10 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         name = self.project_name.value.strip()
         desc = self.description.value.strip()
         tags = _norm_tags(self.tags.value or "")
-        emoji_str = self.emoji.value.strip()
         ch_name = _channel_name(name)
+
+        # Emoji can't be picked in a modal — ask the creator to react instead.
+        emoji_str = await self._capture_emoji(interaction, name)
 
         # Category.
         if category_value == NEW_CATEGORY_SENTINEL:
@@ -380,13 +420,19 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         embed.add_field(name="Role", value=role.mention, inline=True)
         if tags:
             embed.add_field(name="Tags", value=_fmt_tags(tags), inline=False)
-        embed.set_footer(text=f"React with {emoji_str} in #roles to join this project.")
+        if emoji_str:
+            embed.set_footer(text=f"React with {emoji_str} in #roles to join this project.")
         await channel.send(embed=embed)
 
         # Reaction role in #roles.
         roles_ch = gu.get_channel(guild, config.ROLES_CHANNEL_NAME)
         rr_note = ""
-        if roles_ch:
+        if not emoji_str:
+            rr_note = (
+                "⚠️ No emoji chosen (timed out) — add the reaction role later with "
+                f"`/reactionrole add … role:{role.mention}`."
+            )
+        elif roles_ch:
             rows = await self.bot.db.list_reaction_roles(guild.id)
             rr_msg = None
             if rows:
@@ -544,6 +590,33 @@ class _DropView(discord.ui.View):
         self.stop()
 
 
+# ── /projects tag filter (scrollable dropdown of existing tags) ──────────────
+
+ALL_TAGS_SENTINEL = "__all__"
+
+
+class _TagSelect(discord.ui.Select):
+    def __init__(self, tags: list[str]):
+        options = [
+            discord.SelectOption(label="All projects", value=ALL_TAGS_SENTINEL, emoji="🗂️")
+        ] + [discord.SelectOption(label=f"#{t}", value=t) for t in tags[:24]]
+        super().__init__(
+            placeholder="Filter by tag…", min_values=1, max_values=1, options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        tag = None if self.values[0] == ALL_TAGS_SENTINEL else self.values[0]
+        rows = await interaction.client.db.list_projects(interaction.guild_id, tag=tag)
+        embed = _build_projects_embed(interaction.guild, rows, tag)
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class _TagFilterView(discord.ui.View):
+    def __init__(self, tags: list[str]):
+        super().__init__(timeout=180)
+        self.add_item(_TagSelect(tags))
+
+
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
 class Projects(commands.Cog):
@@ -556,9 +629,10 @@ class Projects(commands.Cog):
         name="createproject",
         description="(Eboard) Create a new project role, channel, and reaction-role entry.",
     )
+    @app_commands.describe(lead="The project's team lead (pick the member)")
     @is_eboard()
-    async def createproject(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(_ProjectModal(self.bot))
+    async def createproject(self, interaction: discord.Interaction, lead: discord.Member):
+        await interaction.response.send_modal(_ProjectModal(self.bot, lead))
 
     # ── /dropproject ───────────────────────────────────────────────────────
 
@@ -738,37 +812,30 @@ class Projects(commands.Cog):
     )
     @app_commands.describe(tag="Filter by tag (optional)")
     async def projects_list(self, interaction: discord.Interaction, tag: str | None = None):
-        rows = await self.bot.db.list_projects(interaction.guild_id, tag=tag)
-        if not rows:
-            msg = (
-                f"No projects with tag **{tag}**." if tag
-                else "No projects yet. Eboard can create one with `/createproject`."
+        all_rows = await self.bot.db.list_projects(interaction.guild_id)
+        if not all_rows:
+            await interaction.response.send_message(
+                "No projects yet. Eboard can create one with `/createproject`.",
+                ephemeral=True,
             )
-            await interaction.response.send_message(msg, ephemeral=True)
             return
 
-        embed = discord.Embed(
-            title=f"🗂️ Projects{f' — #{tag}' if tag else ''}",
-            color=discord.Color(config.BOT_COLOR),
-            description=f"{len(rows)} project(s) found.",
-        )
-        for row in rows[:15]:
-            lead_mention = f"<@{row['lead_id']}>"
-            tags_str = _fmt_tags(row["tags"]) if row["tags"] else "—"
-            channel = interaction.guild.get_channel(row["channel_id"])
-            ch_ref = channel.mention if channel else f"`#{_channel_name(row['name'])}`"
-            embed.add_field(
-                name=row["name"],
-                value=(
-                    f"{row['description'][:120]}\n"
-                    f"**Lead:** {lead_mention} | **Channel:** {ch_ref}\n"
-                    f"**Tags:** {tags_str}"
-                ),
-                inline=False,
-            )
-        if len(rows) > 15:
-            embed.set_footer(text=f"Showing 15 of {len(rows)}. Use /projects tag:<tag> to filter.")
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        if tag:
+            rows = await self.bot.db.list_projects(interaction.guild_id, tag=tag)
+            if not rows:
+                await interaction.response.send_message(
+                    f"No projects with tag **#{tag}**.", ephemeral=True
+                )
+                return
+        else:
+            rows = all_rows
+
+        embed = _build_projects_embed(interaction.guild, rows, tag)
+        # Scrollable dropdown of every existing tag, so anyone can filter without
+        # typing. Always lists all tags, regardless of the current filter.
+        tags = _distinct_tags(all_rows)
+        view = _TagFilterView(tags) if tags else None
+        await interaction.response.send_message(embed=embed, view=view)
 
 
 async def setup(bot: commands.Bot) -> None:
