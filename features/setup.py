@@ -14,6 +14,8 @@ and migrates an existing server. This handles "the server already has members".
 """
 from __future__ import annotations
 
+import asyncio
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -21,6 +23,48 @@ from discord.ext import commands
 import config
 from utils import guildutils as gu
 from utils.checks import is_eboard
+
+# ── Interactive exclusion picker ─────────────────────────────────────────────
+
+class _ExcludeSelect(discord.ui.Select):
+    def __init__(self, options: list[discord.SelectOption]):
+        super().__init__(
+            placeholder="Pick categories/channels to exclude from gating (optional)…",
+            min_values=0,
+            max_values=min(len(options), 25),
+            options=options[:25],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class _SetupView(discord.ui.View):
+    def __init__(self, options: list[discord.SelectOption]):
+        super().__init__(timeout=120)
+        self.select = _ExcludeSelect(options)
+        self.add_item(self.select)
+        self.confirmed = False
+        self.excluded_ids: set[int] = set()
+
+    @discord.ui.button(label="Run setup", style=discord.ButtonStyle.green, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.excluded_ids = {int(v) for v in self.select.values}
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content="⚙️ Running setup…", view=self
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = False
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="❌ Setup cancelled.", view=self)
+        self.stop()
 
 
 class Setup(commands.Cog):
@@ -103,7 +147,47 @@ class Setup(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Build the exclusion picker from this guild's categories + channels.
+        options: list[discord.SelectOption] = []
+        for cat in guild.categories:
+            options.append(discord.SelectOption(
+                label=f"📁 {cat.name[:90]}",
+                value=str(cat.id),
+                description=f"Category — skips all {len(cat.channels)} channel(s) inside",
+            ))
+        for ch in guild.channels:
+            if isinstance(ch, discord.CategoryChannel):
+                continue
+            label = f"#{ch.name[:90]}" if isinstance(ch, discord.TextChannel) else f"🔊 {ch.name[:88]}"
+            options.append(discord.SelectOption(
+                label=label, value=str(ch.id), description="Single channel"
+            ))
+
+        # Pre-seed with any IDs already in the env so the user sees them selected.
+        pre = [str(i) for i in config.GATING_IGNORE_IDS]
+
+        if options:
+            view = _SetupView(options)
+            for opt in view.select.options:
+                if opt.value in pre:
+                    opt.default = True
+            await interaction.response.send_message(
+                "**TaigaBot Setup**\n"
+                "Select any **categories or channels** you want to exclude from "
+                "verification gating (e.g. a Projects category gated by interest roles). "
+                "Leave blank to gate everything. Then click **Run setup**.",
+                view=view,
+                ephemeral=True,
+            )
+            await view.wait()
+            if not view.confirmed:
+                return
+            # Merge env-configured IDs with the user's interactive selection.
+            ignore_ids = config.GATING_IGNORE_IDS | view.excluded_ids
+        else:
+            # No categories/channels yet — skip the picker.
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            ignore_ids = config.GATING_IGNORE_IDS
 
         # 0. Bail early with a clear message if the bot lacks the permissions it
         #    needs — otherwise the first API call fails with a cryptic 403.
@@ -213,7 +297,7 @@ class Setup(commands.Cog):
         core_ids = {
             unverified_ch.id, welcome_ch.id, modlog_ch.id, backups_ch.id, roles_ch.id,
         }
-        ignore_ids = config.GATING_IGNORE_IDS
+        # ignore_ids was built above: env GATING_IGNORE merged with interactive picks
         gated = 0
         ignored = 0
         skipped_names: list[str] = []
@@ -242,7 +326,7 @@ class Setup(commands.Cog):
                 skipped_names.append(ch.name)
         msg = f"Gated {gated} channel(s) behind the **{config.VERIFIED_ROLE_NAME}** role."
         if ignored:
-            msg += f" Left {ignored} channel(s) alone (in GATING_IGNORE)."
+            msg += f" Left {ignored} channel(s)/categor(ies) alone (excluded from gating)."
         if skipped_names:
             shown = ", ".join(f"`{n}`" for n in skipped_names[:10])
             extra = f" (+{len(skipped_names) - 10} more)" if len(skipped_names) > 10 else ""
