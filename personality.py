@@ -39,7 +39,6 @@ LINES: dict[str, list[str]] = {
     ],
     # Successful verification (supports {name}).
     "verify_success": [
-        "Hmph, took you long enough, {name}. ...W-welcome, I guess.",
         "F-fine, you're verified! It's not like I'm happy you joined or anything!",
         "There, done. Don't make me regret letting you in, {name}.",
         "You actually did it right?! ...I mean, of course you did. Welcome.",
@@ -70,7 +69,6 @@ LINES: dict[str, list[str]] = {
     ],
     # When the bot is thanked.
     "thanks": [
-        "I-it's not like I did it for you specifically! But... you're welcome.",
         "Hmph, of course. I'm the best, after all.",
         "Don't mention it. Seriously, don't.",
     ],
