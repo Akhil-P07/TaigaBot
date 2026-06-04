@@ -9,9 +9,10 @@ auto-loads on startup, so you add or remove features just by adding/deleting
 files there.
 
 **Multi-guild:** slash commands sync globally, so the bot works in **every server
-it's invited to**. Per-server data (XP, warnings, banned words, automod settings,
-reaction roles, projects) is keyed by guild. One exception — see the verification
-note below.
+it's invited to**. Per-server data (warnings, banned words, automod settings,
+reaction roles, projects) is keyed by guild. Two exceptions are global — shared
+across every server: a member's **XP / level** (so their rank follows them
+everywhere) and their verification status (see the verification note below).
 
 ---
 
@@ -187,6 +188,11 @@ credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
   for a plain bot.
 - **Email domains / role & channel names / OTP timeout / Gemini model** — `.env`.
 - **Banned words** — live via `/automod addword` (per-server).
+- **Spam thresholds & auto-warn** — constants at the top of
+  [`features/moderation.py`](features/moderation.py) (`SPAM_*`, `AUTOWARN_*`).
+  Caught spammers are auto-warned; the Eboard is DMed only once a user hits
+  `SPAM_WARN_ESCALATE` total warnings (and each multiple after), so their DMs
+  aren't flooded.
 - **Resources & AI terms** — `RESOURCES` / `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
 - **XP tuning** — top of [`features/leveling.py`](features/leveling.py).

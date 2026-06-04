@@ -34,11 +34,13 @@ class Personality(commands.Cog):
                         pass
 
     @app_commands.command(name="taiga", description="Get a random remark from TaigaBot. 🐯")
+    @app_commands.checks.cooldown(1, 5.0)  # 1 use / 5s per user (anti-spam)
     async def taiga(self, interaction: discord.Interaction):
         line = personality.say("random") or "..."
         await interaction.response.send_message(line)
 
     @app_commands.command(name="hello", description="Say hi to TaigaBot.")
+    @app_commands.checks.cooldown(1, 5.0)  # 1 use / 5s per user (anti-spam)
     async def hello(self, interaction: discord.Interaction):
         line = personality.say("greeting", name=interaction.user.display_name) or "Hello!"
         await interaction.response.send_message(line)

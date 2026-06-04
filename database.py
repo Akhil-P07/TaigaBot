@@ -8,7 +8,7 @@ Tables
 verified_users  : one row per verified member (discord id, name, email)
 guild_settings  : per-guild automod toggles
 banned_words    : per-guild banned word list (automod)
-levels          : per-guild per-user XP / level
+levels          : per-user XP / level (GLOBAL — shared across all guilds)
 warnings        : moderation warnings issued by Eboard
 reaction_roles  : emoji -> role bindings on specific messages
 """
@@ -46,12 +46,10 @@ CREATE TABLE IF NOT EXISTS banned_words (
 );
 
 CREATE TABLE IF NOT EXISTS levels (
-    guild_id     INTEGER NOT NULL,
-    user_id      INTEGER NOT NULL,
+    user_id      INTEGER PRIMARY KEY,
     xp           INTEGER NOT NULL DEFAULT 0,
     level        INTEGER NOT NULL DEFAULT 0,
-    last_msg_ts  REAL    NOT NULL DEFAULT 0,
-    PRIMARY KEY (guild_id, user_id)
+    last_msg_ts  REAL    NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS warnings (
@@ -131,6 +129,43 @@ class Database:
             )
             await self.conn.commit()
 
+        # Levels used to be per-guild (PRIMARY KEY guild_id, user_id). Collapse
+        # them into a single global row per user so XP follows a member across
+        # every server: sum their XP, keep their most recent message timestamp.
+        cur = await self.conn.execute("PRAGMA table_info(levels)")
+        lcols = {r[1] for r in await cur.fetchall()}
+        if "guild_id" in lcols:
+            await self.conn.executescript(
+                """
+                CREATE TABLE levels_global (
+                    user_id      INTEGER PRIMARY KEY,
+                    xp           INTEGER NOT NULL DEFAULT 0,
+                    level        INTEGER NOT NULL DEFAULT 0,
+                    last_msg_ts  REAL    NOT NULL DEFAULT 0
+                );
+                INSERT INTO levels_global (user_id, xp, last_msg_ts)
+                    SELECT user_id, SUM(xp), MAX(last_msg_ts)
+                    FROM levels GROUP BY user_id;
+                DROP TABLE levels;
+                ALTER TABLE levels_global RENAME TO levels;
+                """
+            )
+            # Recompute level from the summed XP (same gentle curve as leveling).
+            def _level_from_xp(xp: int) -> int:
+                lvl = 0
+                while xp >= 5 * lvl * lvl + 50 * lvl + 100:
+                    xp -= 5 * lvl * lvl + 50 * lvl + 100
+                    lvl += 1
+                return lvl
+
+            cur = await self.conn.execute("SELECT user_id, xp FROM levels")
+            for r in await cur.fetchall():
+                await self.conn.execute(
+                    "UPDATE levels SET level = ? WHERE user_id = ?",
+                    (_level_from_xp(r["xp"]), r["user_id"]),
+                )
+            await self.conn.commit()
+
     async def close(self) -> None:
         if self.conn:
             await self.conn.close()
@@ -152,7 +187,7 @@ class Database:
     # filtered copy of each one.
     _GUILD_TABLES = (
         "verified_users", "guild_settings", "banned_words",
-        "levels", "warnings", "reaction_roles",
+        "warnings", "reaction_roles",
         "projects", "project_requests",
     )
 
@@ -181,6 +216,11 @@ class Database:
                     "WHERE guild_id = ?",
                     (guild_id,),
                 )
+            # Levels are global (not guild-scoped), so copy the whole table —
+            # a restore from any guild's backup recovers everyone's XP.
+            await self.conn.execute(
+                "INSERT INTO bak.levels SELECT * FROM main.levels"
+            )
             await self.conn.commit()
         finally:
             await self.conn.execute("DETACH DATABASE bak")
@@ -282,41 +322,38 @@ class Database:
         )
         return [r["word"] for r in await cur.fetchall()]
 
-    # ── levels / XP ───────────────────────────────────────────────────────
-    async def get_level_row(self, guild_id: int, user_id: int) -> aiosqlite.Row | None:
+    # ── levels / XP (global — shared across all guilds) ─────────────────────
+    async def get_level_row(self, user_id: int) -> aiosqlite.Row | None:
         cur = await self.conn.execute(
-            "SELECT * FROM levels WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
+            "SELECT * FROM levels WHERE user_id = ?", (user_id,)
         )
         return await cur.fetchone()
 
     async def upsert_level(
-        self, guild_id: int, user_id: int, xp: int, level: int, last_msg_ts: float
+        self, user_id: int, xp: int, level: int, last_msg_ts: float
     ) -> None:
         await self.conn.execute(
-            """INSERT INTO levels (guild_id, user_id, xp, level, last_msg_ts)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(guild_id, user_id)
+            """INSERT INTO levels (user_id, xp, level, last_msg_ts)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id)
                DO UPDATE SET xp=excluded.xp, level=excluded.level,
                              last_msg_ts=excluded.last_msg_ts""",
-            (guild_id, user_id, xp, level, last_msg_ts),
+            (user_id, xp, level, last_msg_ts),
         )
         await self.conn.commit()
 
-    async def leaderboard(self, guild_id: int, limit: int = 10) -> list[aiosqlite.Row]:
+    async def leaderboard(self, limit: int = 10) -> list[aiosqlite.Row]:
         cur = await self.conn.execute(
-            """SELECT user_id, xp, level FROM levels
-               WHERE guild_id = ? ORDER BY xp DESC LIMIT ?""",
-            (guild_id, limit),
+            "SELECT user_id, xp, level FROM levels ORDER BY xp DESC LIMIT ?",
+            (limit,),
         )
         return await cur.fetchall()
 
-    async def rank(self, guild_id: int, user_id: int) -> int | None:
+    async def rank(self, user_id: int) -> int | None:
         cur = await self.conn.execute(
             """SELECT COUNT(*) + 1 AS rnk FROM levels
-               WHERE guild_id = ? AND xp > (
-                   SELECT xp FROM levels WHERE guild_id = ? AND user_id = ?
-               )""",
-            (guild_id, guild_id, user_id),
+               WHERE xp > (SELECT xp FROM levels WHERE user_id = ?)""",
+            (user_id,),
         )
         row = await cur.fetchone()
         return row["rnk"] if row else None

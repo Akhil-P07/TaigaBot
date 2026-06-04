@@ -3,7 +3,8 @@
 Automod (toggle each filter on/off with /automod):
   • filter_words    — deletes messages containing banned words
   • filter_invites  — deletes Discord invite links
-  • filter_spam     — flags rapid repeated/identical messages
+  • filter_spam     — flags rapid repeated/identical messages, auto-warns the
+                      offender, and DMs the Eboard
   • filter_mentions — deletes messages with too many user mentions
   • filter_caps     — deletes very long ALL-CAPS messages (off by default)
 
@@ -31,12 +32,23 @@ SPAM_WINDOW_SEC = 7
 SPAM_THRESHOLD = 5  # messages within window
 CAPS_MIN_LEN = 12
 
+# Auto-warn on spam: record a warning (by the bot). Rate-limited per user so one
+# burst — or a persistent spammer — can't flood the warning log.
+AUTOWARN_SPAM = True
+AUTOWARN_COOLDOWN_SEC = 60
+# Only escalate to the Eboard (DM them) once a user has racked up this many total
+# warnings, and then only every this-many afterwards (e.g. at 3, 6, 9, …) so the
+# Eboard's DMs are never flooded by a single repeat offender.
+SPAM_WARN_ESCALATE = 3
+
 
 class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # (guild_id, user_id) -> recent message timestamps
         self._recent: dict[tuple[int, int], deque] = defaultdict(lambda: deque(maxlen=SPAM_THRESHOLD))
+        # (guild_id, user_id) -> last auto-warn timestamp (anti-flood)
+        self._last_autowarn: dict[tuple[int, int], float] = {}
 
     # ── automod listener ──────────────────────────────────────────────────
     @commands.Cog.listener()
@@ -111,6 +123,8 @@ class Moderation(commands.Cog):
             if len(dq) == SPAM_THRESHOLD and (now - dq[0]) < SPAM_WINDOW_SEC:
                 dq.clear()
                 await punish("you're sending messages too fast — slow down.")
+                if AUTOWARN_SPAM:
+                    await self._autowarn_spam(message)
                 return
 
     # ── automod config (Eboard) ───────────────────────────────────────────
@@ -310,6 +324,81 @@ class Moderation(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"🧹 Deleted {len(deleted)} message(s).", ephemeral=True)
+
+    async def _autowarn_spam(self, message: discord.Message) -> None:
+        """Record an automatic warning for spamming and DM the Eboard.
+
+        The warning is attributed to the bot itself (moderator_id = bot id), so it
+        shows up in /warnings alongside manual ones. Rate-limited per user via
+        AUTOWARN_COOLDOWN_SEC so a single burst (or a persistent spammer) doesn't
+        rack up dozens of warnings — the message is still deleted every time by
+        punish(), only the warning is throttled.
+
+        The Eboard is NOT DMed on every warning. They're notified only once a user
+        reaches SPAM_WARN_ESCALATE total warnings (and every that-many afterwards),
+        so a single repeat offender can never flood their DMs.
+        """
+        guild = message.guild
+        member = message.author
+        key = (guild.id, member.id)
+        now = time.time()
+        if now - self._last_autowarn.get(key, 0) < AUTOWARN_COOLDOWN_SEC:
+            return
+        self._last_autowarn[key] = now
+
+        reason = "Automod: spamming (too many messages too fast)"
+        await self.bot.db.add_warning(guild.id, member.id, self.bot.user.id, reason)
+        total = len(await self.bot.db.get_warnings(guild.id, member.id))
+
+        # Let the offender know (every time they trip it).
+        try:
+            await member.send(
+                f"⚠️ You were automatically warned in **{guild.name}** for spamming. "
+                f"You now have **{total}** warning(s) on record. Please slow down."
+            )
+        except discord.HTTPException:
+            pass
+
+        # Only escalate to the Eboard once the user has built up several warnings,
+        # then only at each multiple — keeps their DMs from being flooded.
+        if total < SPAM_WARN_ESCALATE or total % SPAM_WARN_ESCALATE != 0:
+            return
+
+        embed = discord.Embed(
+            title="⚠️ Repeat spammer — auto-warn",
+            description=(
+                f"**User:** {member} (`{member.id}`)\n"
+                f"**Channel:** {message.channel.mention}\n"
+                f"**Total warnings:** {total}\n"
+                f"**Reason:** {reason}"
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text=f"{guild.name} • automod")
+        await self._dm_eboard(guild, embed)
+
+        # Mirror to the mod-log channel too, so it isn't only in DMs.
+        await gu.log_mod_action(guild, embed)
+
+    @staticmethod
+    async def _dm_eboard(guild: discord.Guild, embed: discord.Embed) -> int:
+        """DM an embed to every (non-bot) member holding the Eboard role.
+
+        Returns how many were reached. Best-effort: members with closed DMs are
+        skipped silently. Relies on the members intent (enabled in bot.py)."""
+        role = gu.eboard_role(guild)
+        if role is None:
+            return 0
+        sent = 0
+        for m in role.members:
+            if m.bot:
+                continue
+            try:
+                await m.send(embed=embed)
+                sent += 1
+            except discord.HTTPException:
+                pass
+        return sent
 
     @staticmethod
     async def _dm_action(

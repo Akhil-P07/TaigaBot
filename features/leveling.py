@@ -60,7 +60,7 @@ class Leveling(commands.Cog):
         if not settings["levels_enabled"]:
             return
 
-        row = await self.bot.db.get_level_row(message.guild.id, message.author.id)
+        row = await self.bot.db.get_level_row(message.author.id)
         now = time.time()
         last = row["last_msg_ts"] if row else 0
         if now - last < XP_COOLDOWN_SEC:
@@ -69,9 +69,7 @@ class Leveling(commands.Cog):
         xp = (row["xp"] if row else 0) + random.randint(*XP_PER_MESSAGE)
         old_level = row["level"] if row else 0
         new_level = level_from_xp(xp)
-        await self.bot.db.upsert_level(
-            message.guild.id, message.author.id, xp, new_level, now
-        )
+        await self.bot.db.upsert_level(message.author.id, xp, new_level, now)
 
         if ANNOUNCE_LEVELUPS and new_level > old_level:
             try:
@@ -89,21 +87,21 @@ class Leveling(commands.Cog):
         self, interaction: discord.Interaction, member: discord.Member | None = None
     ):
         member = member or interaction.user
-        row = await self.bot.db.get_level_row(interaction.guild_id, member.id)
+        row = await self.bot.db.get_level_row(member.id)
         if row is None or row["xp"] == 0:
             await interaction.response.send_message(
                 f"{member.display_name} hasn't earned any XP yet.", ephemeral=True
             )
             return
         into, needed = xp_into_level(row["xp"])
-        rank = await self.bot.db.rank(interaction.guild_id, member.id)
+        rank = await self.bot.db.rank(member.id)
         bar_len = 20
         filled = int(bar_len * into / needed) if needed else 0
         bar = "█" * filled + "░" * (bar_len - filled)
         embed = discord.Embed(title=f"📊 {member.display_name}'s rank", color=config.BOT_COLOR)
         embed.add_field(name="Level", value=str(row["level"]))
         embed.add_field(name="Total XP", value=str(row["xp"]))
-        embed.add_field(name="Server rank", value=f"#{rank}")
+        embed.add_field(name="Global rank", value=f"#{rank}")
         embed.add_field(name="Progress", value=f"`{bar}` {into}/{needed} XP", inline=False)
         if member.display_avatar:
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -111,7 +109,7 @@ class Leveling(commands.Cog):
 
     @app_commands.command(name="leaderboard", description="Top members by XP.")
     async def leaderboard(self, interaction: discord.Interaction):
-        rows = await self.bot.db.leaderboard(interaction.guild_id, limit=10)
+        rows = await self.bot.db.leaderboard(limit=10)
         if not rows:
             await interaction.response.send_message(
                 "No one's earned XP yet. Get chatting!", ephemeral=True
