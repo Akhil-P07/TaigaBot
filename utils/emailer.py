@@ -17,18 +17,20 @@ class EmailError(Exception):
     """Raised when the OTP email could not be sent."""
 
 
-def send_otp_email(to_address: str, code: str, discord_name: str) -> None:
+def send_otp_email(
+    to_address: str, code: str, discord_name: str, guild_name: str = "TaigaBot"
+) -> None:
     if not config.GMAIL_ADDRESS or not config.GMAIL_APP_PASSWORD:
         raise EmailError("Email is not configured (GMAIL_ADDRESS / GMAIL_APP_PASSWORD).")
 
     msg = EmailMessage()
-    msg["Subject"] = f"Your TaigaBot verification code: {code}"
+    msg["Subject"] = f"Your {guild_name} verification code: {code}"
     msg["From"] = f"TaigaBot <{config.GMAIL_ADDRESS}>"
     msg["To"] = to_address
 
     msg.set_content(
         f"Hi {discord_name},\n\n"
-        f"Your verification code for the AI Club Discord is: {code}\n\n"
+        f"Your verification code for **{guild_name}** on Discord is: {code}\n\n"
         f"Enter it in Discord with:  /confirm code:{code}\n\n"
         f"This code expires in {config.OTP_TTL_MINUTES} minutes. "
         f"If you didn't request this, you can ignore this email.\n\n"
@@ -37,9 +39,9 @@ def send_otp_email(to_address: str, code: str, discord_name: str) -> None:
     msg.add_alternative(
         f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto;">
-          <h2 style="color:#E8552D;">AI Club Verification</h2>
+          <h2 style="color:#E8552D;">{guild_name} — Verification</h2>
           <p>Hi {discord_name},</p>
-          <p>Your verification code is:</p>
+          <p>Your verification code for <strong>{guild_name}</strong> is:</p>
           <p style="font-size:32px; font-weight:bold; letter-spacing:6px;
                     background:#f4f4f4; padding:16px; text-align:center; border-radius:8px;">
             {code}

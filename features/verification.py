@@ -118,7 +118,8 @@ class Verification(commands.Cog):
 
         code = f"{random.randint(0, 999999):06d}"
         try:
-            await asyncio.to_thread(send_otp_email, email, code, member.display_name)
+            guild_name = interaction.guild.name if interaction.guild else "TaigaBot"
+            await asyncio.to_thread(send_otp_email, email, code, member.display_name, guild_name)
         except EmailError as e:
             await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
             return
