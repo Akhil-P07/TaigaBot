@@ -220,21 +220,50 @@ class Moderation(commands.Cog):
         )
 
     # ── moderation commands (Eboard) ──────────────────────────────────────
+    @staticmethod
+    def _cannot_act(interaction: discord.Interaction, member: discord.Member) -> str | None:
+        """Return a human-readable reason this action can't proceed, or None if
+        it's fine. Catches the usual failures up front (self/owner/hierarchy) so
+        we give a clear message instead of a generic 'something went wrong'."""
+        if member.id == interaction.user.id:
+            return "🙃 You can't do that to yourself."
+        if member.id == interaction.guild.owner_id:
+            return "⛔ I can't action the server owner."
+        if member.id == interaction.guild.me.id:
+            return "🙃 I'm not going to do that to myself."
+        if member.top_role >= interaction.guild.me.top_role:
+            return (
+                "⛔ Their highest role is above (or equal to) mine, so Discord won't "
+                "let me. Move my **TaigaBot** role above theirs in "
+                "**Server Settings → Roles**."
+            )
+        return None
+
     @app_commands.command(name="kick", description="(Eboard) Kick a member.")
     @app_commands.describe(member="Member to kick", reason="Reason")
     @is_eboard()
     async def kick(
         self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason given"
     ):
+        await interaction.response.defer(ephemeral=True)
+        blocked = self._cannot_act(interaction, member)
+        if blocked:
+            await interaction.followup.send(blocked, ephemeral=True)
+            return
         # DM before kicking — afterwards we can't reach them.
         dmed = await self._dm_action(
             member, interaction.guild.name, "Kicked", reason, discord.Color.orange()
         )
-        await member.kick(reason=f"{interaction.user}: {reason}")
+        try:
+            await member.kick(reason=f"{interaction.user}: {reason}")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "⛔ I couldn't kick them — I need the **Kick Members** permission and "
+                "my role must be above theirs.", ephemeral=True
+            )
+            return
         note = "" if dmed else "\n*(couldn't DM them — DMs may be off.)*"
-        await interaction.response.send_message(
-            f"👢 Kicked {member} — {reason}{note}", ephemeral=True
-        )
+        await interaction.followup.send(f"👢 Kicked {member} — {reason}{note}", ephemeral=True)
         await self._log("Kick", interaction, member, reason)
 
     @app_commands.command(name="ban", description="(Eboard) Ban a member.")
@@ -243,15 +272,25 @@ class Moderation(commands.Cog):
     async def ban(
         self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason given"
     ):
+        await interaction.response.defer(ephemeral=True)
+        blocked = self._cannot_act(interaction, member)
+        if blocked:
+            await interaction.followup.send(blocked, ephemeral=True)
+            return
         # DM before banning — afterwards we can't reach them.
         dmed = await self._dm_action(
             member, interaction.guild.name, "Banned", reason, discord.Color.red()
         )
-        await member.ban(reason=f"{interaction.user}: {reason}", delete_message_days=1)
+        try:
+            await member.ban(reason=f"{interaction.user}: {reason}", delete_message_days=1)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "⛔ I couldn't ban them — I need the **Ban Members** permission and "
+                "my role must be above theirs.", ephemeral=True
+            )
+            return
         note = "" if dmed else "\n*(couldn't DM them — DMs may be off.)*"
-        await interaction.response.send_message(
-            f"🔨 Banned {member} — {reason}{note}", ephemeral=True
-        )
+        await interaction.followup.send(f"🔨 Banned {member} — {reason}{note}", ephemeral=True)
         await self._log("Ban", interaction, member, reason)
 
     @app_commands.command(name="timeout", description="(Eboard) Timeout a member for N minutes.")
@@ -266,9 +305,21 @@ class Moderation(commands.Cog):
     ):
         import datetime
 
+        await interaction.response.defer(ephemeral=True)
+        blocked = self._cannot_act(interaction, member)
+        if blocked:
+            await interaction.followup.send(blocked, ephemeral=True)
+            return
         until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
-        await member.timeout(until, reason=f"{interaction.user}: {reason}")
-        await interaction.response.send_message(
+        try:
+            await member.timeout(until, reason=f"{interaction.user}: {reason}")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "⛔ I couldn't time them out — I need the **Moderate Members** "
+                "permission and my role must be above theirs.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
             f"⏲️ Timed out {member} for {minutes} min — {reason}", ephemeral=True
         )
         await self._log("Timeout", interaction, member, f"{minutes}m — {reason}")
