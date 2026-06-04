@@ -300,7 +300,12 @@ class Setup(commands.Cog):
         def status(obj, label):
             return f"{'✅' if obj else '❌'} {label}"
 
-        verified_count = await self.bot.db.count_verified(guild.id)
+        # Count members who currently hold the Verified role in THIS guild, not
+        # DB rows by guild_id — verification is global, so a member verified on
+        # another server is promoted here (role granted) without a row for this
+        # guild, and a DB count would wrongly read 0.
+        vrole = gu.verified_role(guild)
+        verified_count = len(vrole.members) if vrole else 0
         lines = [
             status(gu.eboard_role(guild), f"Eboard role (`{config.EBOARD_ROLE_NAME}`)"),
             status(gu.unverified_role(guild), f"Unverified role (`{config.UNVERIFIED_ROLE_NAME}`)"),
