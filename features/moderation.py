@@ -69,11 +69,8 @@ class Moderation(commands.Cog):
         content = message.content
         lowered = content.lower()
 
-        async def punish(reason: str):
-            try:
-                await message.delete()
-            except discord.HTTPException:
-                return
+        async def announce(reason: str):
+            """Post the in-channel notice and mod-log entry (no deletion)."""
             sass = personality.say("automod")
             try:
                 await message.channel.send(
@@ -89,6 +86,13 @@ class Moderation(commands.Cog):
             )
             embed.add_field(name="Content", value=(content[:1000] or "*(empty)*"), inline=False)
             await gu.log_mod_action(message.guild, embed)
+
+        async def punish(reason: str):
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                return
+            await announce(reason)
 
         # banned words
         if settings["filter_words"]:
@@ -119,10 +123,13 @@ class Moderation(commands.Cog):
             key = (message.guild.id, message.author.id)
             now = time.time()
             dq = self._recent[key]
-            dq.append(now)
-            if len(dq) == SPAM_THRESHOLD and (now - dq[0]) < SPAM_WINDOW_SEC:
+            dq.append((now, message))
+            if len(dq) == SPAM_THRESHOLD and (now - dq[0][0]) < SPAM_WINDOW_SEC:
+                # Delete the whole burst by this user, not just the last message.
+                burst = [m for _, m in dq]
                 dq.clear()
-                await punish("you're sending messages too fast — slow down.")
+                await self._bulk_delete(message.channel, burst)
+                await announce("you're sending messages too fast — slow down.")
                 if AUTOWARN_SPAM:
                     await self._autowarn_spam(message)
                 return
@@ -379,6 +386,27 @@ class Moderation(commands.Cog):
 
         # Mirror to the mod-log channel too, so it isn't only in DMs.
         await gu.log_mod_action(guild, embed)
+
+    @staticmethod
+    async def _bulk_delete(channel: discord.abc.Messageable, messages: list) -> None:
+        """Delete a batch of messages best-effort.
+
+        Tries the bulk endpoint first (one API call for the whole burst), then
+        falls back to deleting individually — bulk delete needs a real text
+        channel and rejects messages older than 14 days. Already-gone messages
+        are ignored."""
+        if not messages:
+            return
+        try:
+            await channel.delete_messages(messages)
+            return
+        except (discord.HTTPException, AttributeError):
+            pass
+        for m in messages:
+            try:
+                await m.delete()
+            except discord.HTTPException:
+                pass
 
     @staticmethod
     async def _dm_eboard(guild: discord.Guild, embed: discord.Embed) -> int:
