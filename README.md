@@ -79,21 +79,41 @@ copy .env.example .env
 py bot.py
 ```
 
-### 6. In Discord, as an admin/Eboard, run once:
+### 6. In Discord, as the server owner or an administrator, run once:
 ```
 /setup
 ```
-This creates the roles (`Unverified`, `Verified`, `Eboard`) and channels
-(`#unverified`, `#welcome`, `#mod-log`), then **gates every channel behind the
-`Verified` role** (default-deny): `@everyone` is denied view, and only
-`Verified`/`Eboard` can see them. `#unverified` is the verification landing, and
-`#welcome` is a public, read-only channel anyone can run `/verify` from. Finally
-it **assigns `Unverified` to every existing member** who isn't verified yet.
+`/setup` can only be run by the **server owner or a member with the
+Administrator permission** (not all Eboard members), since it reshapes the whole
+server.
+
+It creates the roles (`Unverified`, `Verified`, `Eboard`) and channels
+(`#unverified`, `#welcome`, `#mod-log`, `#taiga-backups`, `#roles`), then **gates
+every channel behind the `Verified` role** (default-deny): `@everyone` is denied
+view, and only `Verified`/`Eboard` can see them. `#unverified` is the
+verification landing, `#welcome` is a public, read-only channel anyone can run
+`/verify` from, and `#roles` is where verified members self-assign interest roles
+(set them up with `/reactionrole`). Finally it **assigns `Unverified` to every
+existing member** who isn't verified yet.
 
 Because access is driven by *having* `Verified` (not by *lacking* `Unverified`),
 a member with no roles — e.g. someone who joined while the bot was asleep — sees
 nothing until they verify. `/setup` is idempotent, so re-run it any time (e.g.
 after adding channels) to re-apply the gating.
+
+#### Optional: fresh-start role reset (`RESET_ROLES_ON_SETUP`)
+If you're adding TaigaBot to an **existing** server where members already hold
+self-assign/interest roles that grant channel access, gating alone won't lock
+them out — Discord lets a role's "allow view" override the `@everyone` deny, so
+those members keep access without verifying. Set `RESET_ROLES_ON_SETUP=1` to make
+`/setup` first **remove every member's roles** (except `Eboard`, `Verified`,
+`Unverified`, bot-managed roles, and any role above TaigaBot) so nobody keeps old
+access until they re-verify and re-pick their roles in `#roles`.
+
+> ⚠️ **Destructive and irreversible** — it wipes all members' role selections,
+> and it runs on **every** `/setup`. Intended use: set `RESET_ROLES_ON_SETUP=1`,
+> run `/setup` once, then set it back to `0`. Leave it off (the default) for
+> normal servers.
 
 > **Important:** In *Server Settings → Roles*, drag **TaigaBot's** role **above**
 > the `Unverified`/`Verified` roles (and any reaction-role roles), or it can't

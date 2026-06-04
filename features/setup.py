@@ -53,16 +53,54 @@ class Setup(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             return False
 
+    async def _strip_roles(self, guild: discord.Guild, keep: set) -> int:
+        """Remove every member's roles except those in `keep`. Skips @everyone,
+        managed roles (bots/booster), and roles above TaigaBot (Discord won't let
+        it touch those). Returns how many members were changed. DESTRUCTIVE."""
+        bot_top = guild.me.top_role
+        changed = 0
+        async for member in guild.fetch_members(limit=None):
+            if member.bot:
+                continue
+            to_remove = [
+                r for r in member.roles
+                if r != guild.default_role
+                and not r.managed
+                and r < bot_top
+                and r not in keep
+            ]
+            if not to_remove:
+                continue
+            try:
+                await member.remove_roles(
+                    *to_remove, reason="TaigaBot: role reset before re-verification"
+                )
+                changed += 1
+            except discord.Forbidden:
+                pass
+        return changed
+
     @app_commands.command(
         name="setup",
-        description="Create TaigaBot's roles/channels and assign Unverified to existing members.",
+        description="(Server owner) Create TaigaBot's roles/channels and gate the server.",
     )
     @app_commands.default_permissions(administrator=True)
-    @is_eboard()
     async def setup_cmd(self, interaction: discord.Interaction):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("Run this in a server.", ephemeral=True)
+            return
+
+        # /setup is powerful (and optionally destructive), so restrict it to the
+        # server owner or any member with the Administrator permission — not all
+        # Eboard members.
+        member = interaction.user
+        is_admin = isinstance(member, discord.Member) and member.guild_permissions.administrator
+        if member.id != guild.owner_id and not is_admin:
+            await interaction.response.send_message(
+                "⛔ Only the **server owner** or an **administrator** can run `/setup`.",
+                ephemeral=True,
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -107,6 +145,18 @@ class Setup(commands.Cog):
         )
         steps.append(f"Roles ready: {unverified.mention}, {verified.mention}, {eboard.mention}")
 
+        # 1.5 OPTIONAL, DESTRUCTIVE: wipe everyone's roles (except the functional
+        #     ones) so old interest/self-assign roles no longer grant access until
+        #     members re-verify and re-pick in #roles. Opt in via RESET_ROLES_ON_SETUP.
+        if config.RESET_ROLES_ON_SETUP:
+            keep = {unverified, verified, eboard}
+            stripped = await self._strip_roles(guild, keep)
+            steps.append(
+                f"🧹 Role reset: removed non-essential roles from {stripped} member(s) "
+                f"(kept {config.EBOARD_ROLE_NAME}/{config.VERIFIED_ROLE_NAME}/"
+                f"{config.UNVERIFIED_ROLE_NAME} + bot-managed roles)."
+            )
+
         # 2. Core channels. Overwrites are applied explicitly (not just on
         #    creation) so re-running /setup migrates an existing server too.
         # #unverified: the verification landing — only Unverified members see/talk.
@@ -140,9 +190,19 @@ class Setup(commands.Cog):
             backups_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
         await self._set_perms(backups_ch, eboard, view_channel=True, reason="TaigaBot setup")
+        # #roles: where verified members self-assign interest roles (set up with
+        # /reactionrole). Visible + reactable to Verified, but read-only.
+        roles_ch = await self._ensure_channel(guild, config.ROLES_CHANNEL_NAME)
+        await self._set_perms(
+            roles_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
+        )
+        await self._set_perms(
+            roles_ch, verified, view_channel=True, send_messages=False,
+            add_reactions=True, read_message_history=True, reason="TaigaBot setup",
+        )
         steps.append(
             f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, "
-            f"{modlog_ch.mention}, {backups_ch.mention}"
+            f"{modlog_ch.mention}, {backups_ch.mention}, {roles_ch.mention}"
         )
 
         # 3. Gate every OTHER channel/category behind the Verified role
@@ -150,7 +210,9 @@ class Setup(commands.Cog):
         #    Eboard can. A member with no roles therefore sees nothing until they
         #    verify — safe even if the bot was offline when they joined. Covers
         #    categories and voice channels, not just text.
-        core_ids = {unverified_ch.id, welcome_ch.id, modlog_ch.id, backups_ch.id}
+        core_ids = {
+            unverified_ch.id, welcome_ch.id, modlog_ch.id, backups_ch.id, roles_ch.id,
+        }
         gated = 0
         skipped_names: list[str] = []
         for ch in guild.channels:

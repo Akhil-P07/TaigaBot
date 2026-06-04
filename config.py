@@ -39,6 +39,20 @@ UNVERIFIED_CHANNEL_NAME: str = _get("UNVERIFIED_CHANNEL_NAME", "unverified")
 WELCOME_CHANNEL_NAME: str = _get("WELCOME_CHANNEL_NAME", "welcome")
 MODLOG_CHANNEL_NAME: str = _get("MODLOG_CHANNEL_NAME", "mod-log")
 BACKUP_CHANNEL_NAME: str = _get("BACKUP_CHANNEL_NAME", "taiga-backups")
+ROLES_CHANNEL_NAME: str = _get("ROLES_CHANNEL_NAME", "roles")
+
+
+def _flag(name: str, default: str = "0") -> bool:
+    return _get(name, default).lower() in ("1", "true", "yes", "on")
+
+
+# ── Fresh-start role reset (DESTRUCTIVE, opt-in) ─────────────────────────────
+# When True, /setup first removes every member's roles (except Eboard, Verified,
+# Unverified, managed/bot roles, and any role above TaigaBot) so that nobody
+# keeps access granted by old self-assign/interest roles until they re-verify
+# and re-pick in the #roles channel. This re-runs on EVERY /setup, so the
+# intended use is: enable it, run /setup once, then set it back to off.
+RESET_ROLES_ON_SETUP: bool = _flag("RESET_ROLES_ON_SETUP", "0")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH: str = _get("DB_PATH", "taigabot.db")
