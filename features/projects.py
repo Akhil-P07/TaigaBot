@@ -585,7 +585,7 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         embed.add_field(name="Role", value=role.mention, inline=True)
         if tags:
             embed.add_field(name="Tags", value=_fmt_tags(tags), inline=False)
-        embed.set_footer(text="Use /joinproject to request to join this project.")
+        embed.set_footer(text="Welcome to the team! Leads approve new members from their DMs.")
         try:
             await channel.send(embed=embed)
         except discord.HTTPException:
