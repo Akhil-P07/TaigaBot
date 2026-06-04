@@ -8,7 +8,9 @@ Edit RESOURCES and AI_TERMS freely — they're plain Python data.
 """
 from __future__ import annotations
 
+import logging
 import random
+import socket
 import urllib.parse
 import xml.etree.ElementTree as ET
 
@@ -19,7 +21,11 @@ from discord.ext import commands
 
 import config
 
-ARXIV_API = "http://export.arxiv.org/api/query"
+log = logging.getLogger("taigabot.resources")
+
+ARXIV_API = "https://export.arxiv.org/api/query"
+# arXiv asks API clients to identify themselves.
+ARXIV_HEADERS = {"User-Agent": "TaigaBot/1.0 (RIT AI Club Discord bot)"}
 
 # ✏️ Curated resources — add your own club favorites here.
 RESOURCES: dict[str, list[tuple[str, str]]] = {
@@ -77,15 +83,23 @@ class Resources(commands.Cog):
         }
         url = f"{ARXIV_API}?{urllib.parse.urlencode(params)}"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            # Force IPv4: many cloud hosts (e.g. Replit) hang trying arXiv's IPv6.
+            connector = aiohttp.TCPConnector(family=socket.AF_INET)
+            async with aiohttp.ClientSession(
+                headers=ARXIV_HEADERS, connector=connector
+            ) as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=20)
+                ) as resp:
+                    resp.raise_for_status()
                     text = await resp.text()
+            root = ET.fromstring(text)
         except Exception:  # noqa: BLE001
+            log.exception("arXiv request failed for query %r", query)
             await interaction.followup.send("⚠️ Couldn't reach arXiv right now. Try again later.")
             return
 
         ns = {"a": "http://www.w3.org/2005/Atom"}
-        root = ET.fromstring(text)
         entries = root.findall("a:entry", ns)
         if not entries:
             await interaction.followup.send(f"No papers found for **{query}**.")

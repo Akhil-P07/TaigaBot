@@ -70,6 +70,26 @@ CREATE TABLE IF NOT EXISTS reaction_roles (
     role_id    INTEGER NOT NULL,
     PRIMARY KEY (message_id, emoji)
 );
+
+CREATE TABLE IF NOT EXISTS projects (
+    channel_id  INTEGER PRIMARY KEY,
+    guild_id    INTEGER NOT NULL,
+    name        TEXT    NOT NULL,
+    role_id     INTEGER NOT NULL,
+    lead_id     INTEGER NOT NULL,
+    description TEXT    NOT NULL DEFAULT '',
+    tags        TEXT    NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_requests (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id    INTEGER NOT NULL,
+    channel_id  INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'pending',
+    created_at  INTEGER NOT NULL
+);
 """
 
 # Default automod toggle values, used when a guild has no row yet.
@@ -117,6 +137,7 @@ class Database:
     _GUILD_TABLES = (
         "verified_users", "guild_settings", "banned_words",
         "levels", "warnings", "reaction_roles",
+        "projects", "project_requests",
     )
 
     async def export_guild(self, guild_id: int, dest_path: str) -> None:
@@ -342,3 +363,72 @@ class Database:
             "SELECT * FROM reaction_roles WHERE guild_id = ?", (guild_id,)
         )
         return await cur.fetchall()
+
+    # ── projects ──────────────────────────────────────────────────────────────
+
+    async def add_project(
+        self, channel_id: int, guild_id: int, name: str,
+        role_id: int, lead_id: int, description: str, tags: str,
+    ) -> None:
+        await self.conn.execute(
+            """INSERT OR REPLACE INTO projects
+               (channel_id, guild_id, name, role_id, lead_id, description, tags, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (channel_id, guild_id, name, role_id, lead_id, description, tags, int(time.time())),
+        )
+        await self.conn.commit()
+
+    async def get_project(self, channel_id: int) -> aiosqlite.Row | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM projects WHERE channel_id = ?", (channel_id,)
+        )
+        return await cur.fetchone()
+
+    async def list_projects(self, guild_id: int, tag: str | None = None) -> list[aiosqlite.Row]:
+        if tag:
+            cur = await self.conn.execute(
+                "SELECT * FROM projects WHERE guild_id = ? AND (',' || lower(tags) || ',') LIKE ? ORDER BY name",
+                (guild_id, f"%,{tag.lower().strip()},%"),
+            )
+        else:
+            cur = await self.conn.execute(
+                "SELECT * FROM projects WHERE guild_id = ? ORDER BY name", (guild_id,)
+            )
+        return await cur.fetchall()
+
+    async def delete_project(self, channel_id: int) -> None:
+        await self.conn.execute("DELETE FROM projects WHERE channel_id = ?", (channel_id,))
+        await self.conn.execute(
+            "DELETE FROM project_requests WHERE channel_id = ?", (channel_id,)
+        )
+        await self.conn.commit()
+
+    # ── project requests ──────────────────────────────────────────────────────
+
+    async def add_project_request(self, guild_id: int, channel_id: int, user_id: int) -> int:
+        cur = await self.conn.execute(
+            """INSERT INTO project_requests (guild_id, channel_id, user_id, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (guild_id, channel_id, user_id, int(time.time())),
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def get_project_request(self, request_id: int) -> aiosqlite.Row | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM project_requests WHERE id = ?", (request_id,)
+        )
+        return await cur.fetchone()
+
+    async def has_pending_request(self, channel_id: int, user_id: int) -> bool:
+        cur = await self.conn.execute(
+            "SELECT 1 FROM project_requests WHERE channel_id = ? AND user_id = ? AND status = 'pending'",
+            (channel_id, user_id),
+        )
+        return await cur.fetchone() is not None
+
+    async def update_request_status(self, request_id: int, status: str) -> None:
+        await self.conn.execute(
+            "UPDATE project_requests SET status = ? WHERE id = ?", (status, request_id)
+        )
+        await self.conn.commit()

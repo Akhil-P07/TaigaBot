@@ -28,6 +28,7 @@ name within each guild. One exception — see the verification note below.
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
 | **Backups** | `features/backup.py` | `/backup` (Eboard) |
+| **Projects** | `features/projects.py` | `/createproject`, `/dropproject` (Eboard), `/joinproject`, `/projects` |
 | **Help** | `features/help.py` | `/help` |
 
 All moderation/admin commands check the caller's **Eboard** role (server admins

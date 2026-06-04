@@ -108,6 +108,15 @@ class Backup(commands.Cog):
         channel = self._channel_for(guild)
         if channel is None:
             return None
+        # Make sure we can actually post here before doing the work — otherwise
+        # we'd 403 mid-upload. (e.g. a #taiga-backups the bot can't access.)
+        me_perms = channel.permissions_for(guild.me)
+        if not (me_perms.view_channel and me_perms.send_messages and me_perms.attach_files):
+            log.warning(
+                "Backup skipped for '%s' (id=%s) — I can't post in #%s. Run /setup in that server.",
+                guild.name, guild.id, channel.name,
+            )
+            return None
         files_meta, db_bytes, count = await build_guild_backup(self.bot.db, guild)
         try:
             files = [discord.File(p, filename=n) for p, n in files_meta]
@@ -119,6 +128,12 @@ class Backup(commands.Cog):
                 ),
                 files=files,
             )
+        except discord.Forbidden:
+            log.warning(
+                "Backup skipped for '%s' (id=%s) — I can't post in #%s. Run /setup in that server.",
+                guild.name, guild.id, channel.name,
+            )
+            return None
         finally:
             for path, _ in files_meta:
                 try:

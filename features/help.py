@@ -50,6 +50,14 @@ class Help(commands.Cog):
             inline=False,
         )
         embed.add_field(
+            name="🗂️ Projects",
+            value=(
+                "`/projects [tag]` — browse all projects, optionally filtered by tag\n"
+                "`/joinproject [tag]` — request to join a project (lead approves/denies via DM)"
+            ),
+            inline=False,
+        )
+        embed.add_field(
             name="📈 Leveling",
             value=(
                 "`/rank [member]` — your (or someone's) level & XP\n"
@@ -73,6 +81,14 @@ class Help(commands.Cog):
         )
 
         if staff:
+            embed.add_field(
+                name="🗂️ Projects (🛡️ Eboard)",
+                value=(
+                    "`/createproject` — create a project role, channel, and reaction-role entry\n"
+                    "`/dropproject` — delete a project's channel, role, and entry (select from list)"
+                ),
+                inline=False,
+            )
             embed.add_field(
                 name="🔧 Server (🛡️ Eboard)",
                 value=(
