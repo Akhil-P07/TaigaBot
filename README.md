@@ -151,20 +151,20 @@ re-verification needed. Eboard can `/whois @member` or `/unverify @member`.
 
 A lightweight project directory with self-service joining.
 
-- **`/createproject lead:@member`** (Eboard) — pick the team lead (real member
-  picker), then a form for name, description, and tags. You choose (or create) a
-  category, then **react with the join emoji** when prompted. The bot creates a
-  **project role** (and gives it to the lead immediately), a **channel** gated to
-  that role, an intro message, a reaction-role entry in `#roles`, and a DB record.
+- **`/createproject lead:@member`** (Eboard) — pick the primary team lead (real
+  member picker), then a form for name, description, and tags. Choose (or create)
+  a category and optionally **add co-leads** from a member dropdown. The bot
+  creates a **project role** (given to every lead immediately), a **channel**
+  gated to that role, an intro message, and a DB record. Joining is via
+  `/joinproject` (lead approval), so **no self-assign reaction role is created**.
 - **`/projects [tag]`** — browse all projects; includes a **scrollable tag
   dropdown** to filter without typing.
 - **`/projecttags`** — list every tag and how many projects use it.
 - **`/joinproject [tag]`** — anyone picks a project from a dropdown and requests to
-  join. The **team lead gets a DM** with Approve/Deny buttons (which survive
-  restarts). On approval the role is granted automatically; either way the
-  requester is DM'd the outcome.
-- **`/dropproject`** (Eboard) — select a project to delete its channel, role, and
-  reaction-role entry.
+  join. **Every lead gets a DM** with Approve/Deny buttons (which survive
+  restarts); any lead can decide (first to act wins). On approval the role is
+  granted automatically; either way the requester is DM'd the outcome.
+- **`/dropproject`** (Eboard) — select a project to delete its channel and role.
 
 **Recommended:** put your projects in one category and **exclude that category**
 from gating (see above) so project channels stay visible only to their role

@@ -86,7 +86,7 @@ class Help(commands.Cog):
             embed.add_field(
                 name="🗂️ Projects (🛡️ Eboard)",
                 value=(
-                    "`/createproject` — create a project role, channel, and reaction-role entry\n"
+                    "`/createproject lead:@member` — create a project (role, channel, lead(s))\n"
                     "`/dropproject` — delete a project's channel, role, and entry (select from list)"
                 ),
                 inline=False,

@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name        TEXT    NOT NULL,
     role_id     INTEGER NOT NULL,
     lead_id     INTEGER NOT NULL,
+    lead_ids    TEXT    NOT NULL DEFAULT '',
     description TEXT    NOT NULL DEFAULT '',
     tags        TEXT    NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL
@@ -114,6 +115,21 @@ class Database:
         self.conn.row_factory = aiosqlite.Row
         await self.conn.executescript(SCHEMA)
         await self.conn.commit()
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Lightweight schema migrations for DBs created by older versions."""
+        cur = await self.conn.execute("PRAGMA table_info(projects)")
+        cols = {r[1] for r in await cur.fetchall()}
+        if cols and "lead_ids" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE projects ADD COLUMN lead_ids TEXT NOT NULL DEFAULT ''"
+            )
+            # Backfill from the single legacy lead_id.
+            await self.conn.execute(
+                "UPDATE projects SET lead_ids = CAST(lead_id AS TEXT) WHERE lead_ids = ''"
+            )
+            await self.conn.commit()
 
     async def close(self) -> None:
         if self.conn:
@@ -368,13 +384,16 @@ class Database:
 
     async def add_project(
         self, channel_id: int, guild_id: int, name: str,
-        role_id: int, lead_id: int, description: str, tags: str,
+        role_id: int, lead_ids: list[int], description: str, tags: str,
     ) -> None:
+        leads_csv = ",".join(str(i) for i in lead_ids)
         await self.conn.execute(
             """INSERT OR REPLACE INTO projects
-               (channel_id, guild_id, name, role_id, lead_id, description, tags, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (channel_id, guild_id, name, role_id, lead_id, description, tags, int(time.time())),
+               (channel_id, guild_id, name, role_id, lead_id, lead_ids,
+                description, tags, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (channel_id, guild_id, name, role_id, lead_ids[0], leads_csv,
+             description, tags, int(time.time())),
         )
         await self.conn.commit()
 

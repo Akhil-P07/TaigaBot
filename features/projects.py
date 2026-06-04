@@ -1,21 +1,21 @@
 """Project management — create, browse, join, and drop projects.
 
-/createproject (Eboard): modal for name, description, tags, team lead, and
-  reaction emoji → category picker → creates role, gated channel, intro embed,
-  reaction-role entry in #roles, and a DB record.
+/createproject (Eboard): pick the team lead(s) → modal for name/description/tags
+  → category picker → creates a role (given to the leads), a gated channel, an
+  intro embed, and a DB record. Joining is via /joinproject (lead approval), so
+  no self-assign reaction role is created.
 
 /dropproject (Eboard): select from DB-tracked projects to delete channel + role.
 
 /joinproject [tag]: anyone can browse projects (optionally filtered by tag),
-  pick one, and request to join. The project lead gets a DM with persistent
-  Approve/Deny buttons. On decision, the requester gets a DM and the role is
-  granted automatically on approval.
+  pick one, and request to join. Every project lead gets a DM with persistent
+  Approve/Deny buttons; any lead can decide. On approval the role is granted and
+  the requester is DM'd the outcome.
 
 /projects [tag]: browse all projects, optionally filtered by tag.
 """
 from __future__ import annotations
 
-import asyncio
 import re
 import time
 
@@ -28,7 +28,14 @@ from utils import guildutils as gu
 from utils.checks import is_eboard
 
 NEW_CATEGORY_SENTINEL = "__new__"
-EMOJI_TIMEOUT = 60  # seconds to react with the join emoji during /createproject
+
+
+def _parse_leads(row) -> list[int]:
+    """Lead Discord IDs for a project row. Uses lead_ids (comma-separated) when
+    present, else falls back to the single lead_id (legacy rows)."""
+    raw = (row["lead_ids"] or "").strip() if "lead_ids" in row.keys() else ""
+    ids = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+    return ids or [row["lead_id"]]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,11 +81,14 @@ def _build_projects_embed(guild: discord.Guild, rows, tag: str | None) -> discor
         tags_str = _fmt_tags(row["tags"]) if row["tags"] else "—"
         channel = guild.get_channel(row["channel_id"])
         ch_ref = channel.mention if channel else f"`#{_channel_name(row['name'])}`"
+        lead_ids = _parse_leads(row)
+        leads_str = ", ".join(f"<@{i}>" for i in lead_ids)
+        lead_label = "Leads" if len(lead_ids) > 1 else "Lead"
         embed.add_field(
             name=row["name"],
             value=(
                 f"{row['description'][:120]}\n"
-                f"**Lead:** <@{row['lead_id']}> | **Channel:** {ch_ref}\n"
+                f"**{lead_label}:** {leads_str} | **Channel:** {ch_ref}\n"
                 f"**Tags:** {tags_str}"
             ),
             inline=False,
@@ -252,26 +262,48 @@ class _CategorySelect(discord.ui.Select):
         await interaction.response.defer()
 
 
+class _LeadSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="Add co-leads (optional)…",
+            min_values=0,
+            max_values=10,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
 class _CategoryView(discord.ui.View):
-    def __init__(self, categories: list[discord.CategoryChannel]):
+    def __init__(self, categories: list[discord.CategoryChannel], primary_lead: discord.Member):
         super().__init__(timeout=120)
+        self.primary_lead = primary_lead
         self.select = _CategorySelect(categories)
         self.add_item(self.select)
+        self.lead_select = _LeadSelect()
+        self.add_item(self.lead_select)
         self.confirmed = False
         self.category_value: str = NEW_CATEGORY_SENTINEL
+        self.leads: list[discord.Member] = [primary_lead]
 
-    @discord.ui.button(label="Create project", style=discord.ButtonStyle.green, row=1)
+    @discord.ui.button(label="Create project", style=discord.ButtonStyle.green, row=2)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.category_value = (
             self.select.values[0] if self.select.values else NEW_CATEGORY_SENTINEL
         )
+        # Primary lead first, then any co-leads picked, deduped, no bots.
+        chosen = {self.primary_lead.id: self.primary_lead}
+        for m in self.lead_select.values:
+            if not m.bot:
+                chosen.setdefault(m.id, m)
+        self.leads = list(chosen.values())
         self.confirmed = True
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="⚙️ Creating project…", view=self)
         self.stop()
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, row=1)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, row=2)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         for item in self.children:
             item.disabled = True
@@ -308,12 +340,12 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         tags_fmt = _fmt_tags(self.tags.value or "")
-        view = _CategoryView(guild.categories)
+        view = _CategoryView(guild.categories, self.lead)
         await interaction.response.send_message(
             f"**Project:** {self.project_name.value}\n"
             f"**Tags:** {tags_fmt or 'none'}\n"
-            f"**Lead:** {self.lead.mention}\n\n"
-            "Where should the project channel go?",
+            f"**Lead:** {self.lead.mention}  *(add co-leads below if you want)*\n\n"
+            "Pick a category, optionally add co-leads, then **Create project**.",
             view=view,
             ephemeral=True,
         )
@@ -321,50 +353,19 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         if not view.confirmed:
             return
 
-        await self._create(interaction, guild, self.lead, view.category_value)
-
-    async def _capture_emoji(self, interaction: discord.Interaction, name: str) -> str | None:
-        """Ask the creator to react with the join emoji — this opens Discord's
-        real emoji picker (modals can't). Returns the emoji string, or None on
-        timeout. Posts a temporary prompt in the command channel."""
-        prompt = await interaction.channel.send(
-            f"{interaction.user.mention} — react to **this message** with the emoji "
-            f"members will use to join **{name}** (you have {EMOJI_TIMEOUT}s)."
-        )
-
-        def check(payload: discord.RawReactionActionEvent) -> bool:
-            return (
-                payload.message_id == prompt.id
-                and payload.user_id == interaction.user.id
-            )
-
-        try:
-            payload = await self.bot.wait_for(
-                "raw_reaction_add", check=check, timeout=EMOJI_TIMEOUT
-            )
-            emoji = str(payload.emoji)
-        except asyncio.TimeoutError:
-            emoji = None
-        try:
-            await prompt.delete()
-        except discord.HTTPException:
-            pass
-        return emoji
+        await self._create(interaction, guild, view.leads, view.category_value)
 
     async def _create(
         self,
         interaction: discord.Interaction,
         guild: discord.Guild,
-        lead: discord.Member,
+        leads: list[discord.Member],
         category_value: str,
     ):
         name = self.project_name.value.strip()
         desc = self.description.value.strip()
         tags = _norm_tags(self.tags.value or "")
         ch_name = _channel_name(name)
-
-        # Emoji can't be picked in a modal — ask the creator to react instead.
-        emoji_str = await self._capture_emoji(interaction, name)
 
         # Category.
         if category_value == NEW_CATEGORY_SENTINEL:
@@ -386,12 +387,13 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
                 reason=f"TaigaBot: project role for {name}",
             )
 
-        # Give the team lead the project role right away.
-        try:
-            if role not in lead.roles:
-                await lead.add_roles(role, reason=f"Team lead of {name}")
-        except discord.Forbidden:
-            pass
+        # Give every team lead the project role right away.
+        for lead in leads:
+            try:
+                if role not in lead.roles:
+                    await lead.add_roles(role, reason=f"Team lead of {name}")
+            except discord.Forbidden:
+                pass
 
         # Channel.
         eboard_role = gu.eboard_role(guild)
@@ -423,70 +425,30 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
             description=desc,
             color=discord.Color(config.BOT_COLOR),
         )
-        embed.add_field(name="Team Lead", value=lead.mention, inline=True)
+        leads_str = ", ".join(m.mention for m in leads)
+        embed.add_field(
+            name="Team Lead" + ("s" if len(leads) > 1 else ""),
+            value=leads_str, inline=True,
+        )
         embed.add_field(name="Role", value=role.mention, inline=True)
         if tags:
             embed.add_field(name="Tags", value=_fmt_tags(tags), inline=False)
-        if emoji_str:
-            embed.set_footer(text=f"React with {emoji_str} in #roles to join this project.")
+        embed.set_footer(text="Use /joinproject to request to join this project.")
         await channel.send(embed=embed)
 
-        # Persist to DB FIRST so the project is recorded even if the #roles wiring
-        # below fails (e.g. the bot can't post in #roles).
+        # Persist to the DB. Joining is via /joinproject (lead approval), so we
+        # deliberately do NOT auto-create a self-assign reaction role.
         await self.bot.db.add_project(
-            channel.id, guild.id, name, role.id, lead.id, desc, tags
+            channel.id, guild.id, name, role.id, [m.id for m in leads], desc, tags
         )
-
-        # Reaction role in #roles — best-effort; never let it abort creation.
-        roles_ch = gu.get_channel(guild, config.ROLES_CHANNEL_NAME)
-        rr_note = ""
-        if not emoji_str:
-            rr_note = (
-                "⚠️ No emoji chosen (timed out) — add the reaction role later with "
-                f"`/reactionrole add … role:{role.mention}`."
-            )
-        elif not roles_ch:
-            rr_note = f"⚠️ No `#{config.ROLES_CHANNEL_NAME}` — run `/setup` first."
-        else:
-            try:
-                rows = await self.bot.db.list_reaction_roles(guild.id)
-                rr_msg = None
-                if rows:
-                    try:
-                        rr_msg = await roles_ch.fetch_message(rows[-1]["message_id"])
-                    except discord.NotFound:
-                        rr_msg = None
-                if rr_msg is None:
-                    rr_embed = discord.Embed(
-                        title="🎟️ Pick your projects",
-                        description="React below to join a project channel.",
-                        color=discord.Color(config.BOT_COLOR),
-                    )
-                    rr_embed.set_footer(text="React to get a role • un-react to remove it")
-                    rr_msg = await roles_ch.send(embed=rr_embed)
-                await rr_msg.add_reaction(emoji_str)
-                partial = discord.PartialEmoji.from_str(emoji_str)
-                emoji_key = str(partial.id) if partial.id else (partial.name or emoji_str)
-                await self.bot.db.add_reaction_role(guild.id, rr_msg.id, emoji_key, role.id)
-                rr_note = f"Added {emoji_str} → {role.mention} in {roles_ch.mention}."
-            except discord.Forbidden:
-                rr_note = (
-                    f"⚠️ I can't post in {roles_ch.mention} — re-run `/setup` so I get "
-                    "access there, then add the reaction role manually."
-                )
-            except discord.HTTPException:
-                rr_note = (
-                    f"⚠️ Couldn't set up the reaction role — add it manually with "
-                    f"`/reactionrole … role:{role.mention}`."
-                )
 
         await interaction.followup.send(
             f"✅ **{name}** is ready!\n"
             f"• Channel: {channel.mention}\n"
-            f"• Role: {role.mention}\n"
+            f"• Role: {role.mention} (given to {leads_str})\n"
             f"• Category: **{category.name}**\n"
             f"• Tags: {_fmt_tags(tags) or 'none'}\n"
-            f"• {rr_note}",
+            f"Members join via `/joinproject` — leads approve requests by DM.",
             ephemeral=True,
         )
 
@@ -776,43 +738,43 @@ class Projects(commands.Cog):
             guild.id, view.channel_id, interaction.user.id
         )
 
-        # DM the project lead.
-        lead = guild.get_member(project["lead_id"])
-        if lead is None:
-            try:
-                lead = await guild.fetch_member(project["lead_id"])
-            except discord.NotFound:
-                lead = None
+        # DM every lead — any of them can approve/deny the shared request.
+        embed = discord.Embed(
+            title="📬 New project join request",
+            description=(
+                f"{interaction.user.mention} (`{interaction.user}`) wants to join "
+                f"**{project['name']}**."
+            ),
+            color=discord.Color(config.BOT_COLOR),
+        )
+        embed.add_field(name="Project", value=project["name"], inline=True)
+        if project["tags"]:
+            embed.add_field(name="Tags", value=_fmt_tags(project["tags"]), inline=True)
+        embed.set_footer(text=f"Request ID: {request_id} • the first lead to decide wins")
 
-        if lead:
-            embed = discord.Embed(
-                title="📬 New project join request",
-                description=(
-                    f"{interaction.user.mention} (`{interaction.user}`) wants to join "
-                    f"**{project['name']}**."
-                ),
-                color=discord.Color(config.BOT_COLOR),
-            )
-            embed.add_field(name="Project", value=project["name"], inline=True)
-            if project["tags"]:
-                embed.add_field(name="Tags", value=_fmt_tags(project["tags"]), inline=True)
-            embed.set_footer(text=f"Request ID: {request_id}")
+        notified = 0
+        for lead_id in _parse_leads(project):
+            lead = guild.get_member(lead_id)
+            if lead is None:
+                try:
+                    lead = await guild.fetch_member(lead_id)
+                except discord.NotFound:
+                    continue
             try:
                 await lead.send(embed=embed, view=_ApprovalView(request_id))
-                await interaction.followup.send(
-                    f"✅ Request sent! The project lead for **{project['name']}** will review it.",
-                    ephemeral=True,
-                )
+                notified += 1
             except discord.HTTPException:
-                # Lead has DMs closed — auto-approve as fallback? No — just notify requester.
-                await interaction.followup.send(
-                    f"⚠️ Couldn't DM the project lead (DMs may be closed). "
-                    "Ask an Eboard member to manually add you to the project.",
-                    ephemeral=True,
-                )
+                pass  # that lead has DMs closed — try the others
+
+        if notified:
+            await interaction.followup.send(
+                f"✅ Request sent to the lead(s) of **{project['name']}** — "
+                "you'll be DM'd once it's reviewed.",
+                ephemeral=True,
+            )
         else:
             await interaction.followup.send(
-                "⚠️ The project lead isn't in this server anymore. "
+                "⚠️ Couldn't reach any project lead (DMs closed or they left). "
                 "Ask an Eboard member to add you manually.",
                 ephemeral=True,
             )
