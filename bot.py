@@ -20,6 +20,7 @@ from discord.ext import commands
 import config
 import personality
 from database import Database
+from keep_alive import start_keep_alive
 from utils.checks import NotEboard
 
 logging.basicConfig(
@@ -118,6 +119,7 @@ async def main() -> None:
     if not config.DISCORD_TOKEN:
         log.error("No DISCORD_TOKEN set. Copy .env.example to .env and fill it in.")
         return
+    await start_keep_alive()  # serves HTTP so free hosts (Replit) stay awake
     async with bot:
         await bot.start(config.DISCORD_TOKEN)
 
