@@ -386,6 +386,13 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
                 reason=f"TaigaBot: project role for {name}",
             )
 
+        # Give the team lead the project role right away.
+        try:
+            if role not in lead.roles:
+                await lead.add_roles(role, reason=f"Team lead of {name}")
+        except discord.Forbidden:
+            pass
+
         # Channel.
         eboard_role = gu.eboard_role(guild)
         overwrites = {
@@ -836,6 +843,35 @@ class Projects(commands.Cog):
         tags = _distinct_tags(all_rows)
         view = _TagFilterView(tags) if tags else None
         await interaction.response.send_message(embed=embed, view=view)
+
+    # ── /projecttags ─────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="projecttags",
+        description="List all project tags and how many projects use each.",
+    )
+    async def projecttags(self, interaction: discord.Interaction):
+        rows = await self.bot.db.list_projects(interaction.guild_id)
+        counts: dict[str, int] = {}
+        for r in rows:
+            for t in (r["tags"] or "").split(","):
+                t = t.strip().lower()
+                if t:
+                    counts[t] = counts.get(t, 0) + 1
+        if not counts:
+            await interaction.response.send_message(
+                "No tags yet. Add them when creating a project with `/createproject`.",
+                ephemeral=True,
+            )
+            return
+        lines = [f"`#{t}` — {n} project(s)" for t, n in sorted(counts.items())]
+        embed = discord.Embed(
+            title="🏷️ Project tags",
+            description="\n".join(lines),
+            color=discord.Color(config.BOT_COLOR),
+        )
+        embed.set_footer(text="Filter with /projects tag:<tag> or the dropdown in /projects.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -53,6 +53,7 @@ class Help(commands.Cog):
             name="🗂️ Projects",
             value=(
                 "`/projects [tag]` — browse all projects, optionally filtered by tag\n"
+                "`/projecttags` — list all project tags\n"
                 "`/joinproject [tag]` — request to join a project (lead approves/denies via DM)"
             ),
             inline=False,

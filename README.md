@@ -23,7 +23,7 @@ note below.
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/whois` (Eboard), `/unverify` (Eboard) |
 | **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
-| **Projects** | `features/projects.py` | `/createproject`, `/dropproject` (Eboard), `/joinproject`, `/projects` |
+| **Projects** | `features/projects.py` | `/createproject`, `/dropproject` (Eboard), `/joinproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
@@ -151,11 +151,14 @@ re-verification needed. Eboard can `/whois @member` or `/unverify @member`.
 
 A lightweight project directory with self-service joining.
 
-- **`/createproject`** (Eboard) — a form for name, description, tags, team-lead
-  Discord ID, and a reaction emoji. You pick (or create) a category, then the bot
-  creates a **project role**, a **channel** gated to that role, a formatted intro
-  message (description + lead), a reaction-role entry in `#roles`, and a DB record.
-- **`/projects [tag]`** — browse all projects, optionally filtered by tag.
+- **`/createproject lead:@member`** (Eboard) — pick the team lead (real member
+  picker), then a form for name, description, and tags. You choose (or create) a
+  category, then **react with the join emoji** when prompted. The bot creates a
+  **project role** (and gives it to the lead immediately), a **channel** gated to
+  that role, an intro message, a reaction-role entry in `#roles`, and a DB record.
+- **`/projects [tag]`** — browse all projects; includes a **scrollable tag
+  dropdown** to filter without typing.
+- **`/projecttags`** — list every tag and how many projects use it.
 - **`/joinproject [tag]`** — anyone picks a project from a dropdown and requests to
   join. The **team lead gets a DM** with Approve/Deny buttons (which survive
   restarts). On approval the role is granted automatically; either way the
