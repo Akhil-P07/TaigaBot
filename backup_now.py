@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 import time
 
 import discord
 
 import config
 import database
+from features.backup import build_guild_backup
 from utils import guildutils as gu
 
 
@@ -36,18 +36,23 @@ async def _backup(client: discord.Client, db: database.Database, guild: discord.
         print(f"- {guild.name}: no #{config.BACKUP_CHANNEL_NAME} channel, skipping")
         return False
 
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    tmp = os.path.join(tempfile.gettempdir(), f"taigabot-{guild.id}-{ts}.db")
-    await db.export_guild(guild.id, tmp)
-    size = os.path.getsize(tmp)
+    files_meta, db_bytes, count = await build_guild_backup(db, guild)
     try:
+        ts = time.strftime("%Y%m%d-%H%M%S")
         await channel.send(
-            content=f"🗄️ Manual backup for **{guild.name}** — {ts} ({size / 1024:.0f} KB)",
-            file=discord.File(tmp, filename=f"taigabot-{guild.id}-{ts}.db"),
+            content=(
+                f"🗄️ Manual backup for **{guild.name}** — {ts} "
+                f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified/admin member(s))"
+            ),
+            files=[discord.File(p, filename=n) for p, n in files_meta],
         )
     finally:
-        os.remove(tmp)
-    print(f"- {guild.name}: uploaded {size} bytes to #{channel.name}")
+        for path, _ in files_meta:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    print(f"- {guild.name}: uploaded {db_bytes} bytes + {count}-member roster to #{channel.name}")
     return True
 
 
@@ -55,7 +60,8 @@ async def main() -> None:
     if not config.DISCORD_TOKEN:
         print("No DISCORD_TOKEN set."); return
 
-    intents = discord.Intents.default()  # guilds enabled; that's all we need
+    intents = discord.Intents.default()
+    intents.members = True  # needed to enumerate members for the roster
     client = discord.Client(intents=intents)
     db = database.Database(config.DB_PATH)
     only = os.getenv("GID")

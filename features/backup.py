@@ -9,11 +9,14 @@ container reset — you re-download the latest `.db` and drop it back in.
 
 Each guild's backup contains ONLY that guild's rows (its verified members, XP,
 warnings, settings, …) — never other servers' data — so one server's Eboard can
-never see another's names/emails. /setup creates the Eboard-only backup channel
-(named BACKUP_CHANNEL_NAME) in each server.
+never see another's names/emails. Alongside the .db, each backup includes a CSV
+roster of the guild's current members who hold the Verified role or are admins.
+/setup creates the Eboard-only backup channel (named BACKUP_CHANNEL_NAME) in
+each server.
 """
 from __future__ import annotations
 
+import csv
 import logging
 import os
 import tempfile
@@ -28,6 +31,56 @@ from utils import guildutils as gu
 from utils.checks import is_eboard
 
 log = logging.getLogger("taigabot.backup")
+
+
+async def build_guild_backup(db, guild: discord.Guild):
+    """Create this guild's backup files. Returns (files, db_bytes, roster_count).
+
+    `files` is a list of (temp_path, upload_filename); the caller sends them and
+    then deletes the temp paths. It contains:
+      • the filtered per-guild database (.db), and
+      • a CSV roster of the guild's current verified + admin members.
+
+    A current member is rostered if they hold the Verified role or are an
+    administrator. (Members who verified on another server still appear, because
+    joining here auto-grants them the Verified role.)
+    """
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    db_path = os.path.join(tempfile.gettempdir(), f"taigabot-{guild.id}-{ts}.db")
+    await db.export_guild(guild.id, db_path)
+    db_bytes = os.path.getsize(db_path)
+
+    verified_role = config.VERIFIED_ROLE_NAME.lower()
+    roster_path = os.path.join(tempfile.gettempdir(), f"roster-{guild.id}-{ts}.csv")
+    count = 0
+    with open(roster_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "display_name", "username", "user_id", "is_admin",
+            "has_verified_role", "verified_in_db", "real_name", "email", "verified_at",
+        ])
+        async for m in guild.fetch_members(limit=None):
+            if m.bot:
+                continue
+            is_admin = m.guild_permissions.administrator
+            has_role = any(r.name.lower() == verified_role for r in m.roles)
+            if not (is_admin or has_role):
+                continue
+            info = await db.get_verified_user(m.id)  # fill name/email if on record
+            writer.writerow([
+                m.display_name, str(m), m.id, is_admin, has_role, info is not None,
+                info["real_name"] if info else "",
+                info["email"] if info else "",
+                info["verified_at"] if info else "",
+            ])
+            count += 1
+
+    return (
+        [(db_path, f"taigabot-{guild.id}-{ts}.db"),
+         (roster_path, f"roster-{guild.id}-{ts}.csv")],
+        db_bytes,
+        count,
+    )
 
 
 class Backup(commands.Cog):
@@ -50,23 +103,29 @@ class Backup(commands.Cog):
         return gu.backups_channel(guild)
 
     async def _backup_guild(self, guild: discord.Guild) -> int | None:
-        """Export just this guild's data and upload it to its backup channel.
-        Returns the byte size, or None if the guild has no backup channel."""
+        """Export this guild's data + member roster and upload to its backup
+        channel. Returns the DB byte size, or None if there's no backup channel."""
         channel = self._channel_for(guild)
         if channel is None:
             return None
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        tmp = os.path.join(tempfile.gettempdir(), f"taigabot-{guild.id}-{ts}.db")
-        await self.bot.db.export_guild(guild.id, tmp)
-        size = os.path.getsize(tmp)
+        files_meta, db_bytes, count = await build_guild_backup(self.bot.db, guild)
         try:
+            files = [discord.File(p, filename=n) for p, n in files_meta]
+            ts = time.strftime("%Y%m%d-%H%M%S")
             await channel.send(
-                content=f"🗄️ Backup for **{guild.name}** — {ts} ({size / 1024:.0f} KB)",
-                file=discord.File(tmp, filename=f"taigabot-{guild.id}-{ts}.db"),
+                content=(
+                    f"🗄️ Backup for **{guild.name}** — {ts} "
+                    f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified/admin member(s))"
+                ),
+                files=files,
             )
         finally:
-            os.remove(tmp)
-        return size
+            for path, _ in files_meta:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        return db_bytes
 
     @tasks.loop(hours=12)  # real interval set from config in __init__
     async def auto_backup(self) -> None:
