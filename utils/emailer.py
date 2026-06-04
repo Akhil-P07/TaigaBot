@@ -3,18 +3,45 @@
 Uses a Google "App Password" (not the account password). smtplib is blocking,
 so callers should run `send_otp_email` in a thread (see verification feature,
 which uses `asyncio.to_thread`).
+
+Connections are forced over IPv4. Many hosts (Render/Railway/Fly containers,
+etc.) have no working IPv6 route, so letting Python pick the AAAA record for
+smtp.gmail.com fails immediately with "[Errno 101] Network is unreachable". We
+also fall back from SMTPS:465 to STARTTLS:587 in case one port is throttled.
 """
 from __future__ import annotations
 
 import smtplib
+import socket
 import ssl
 from email.message import EmailMessage
 
 import config
 
+SMTP_HOST = "smtp.gmail.com"
+SMTP_TIMEOUT = 20  # seconds — don't hang the verify flow if the host is firewalled
+
 
 class EmailError(Exception):
     """Raised when the OTP email could not be sent."""
+
+
+class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
+    """SMTP_SSL that connects over IPv4 only (dodges ENETUNREACH on hosts with no
+    IPv6 route), while still verifying TLS against the real hostname."""
+
+    def _get_socket(self, host, port, timeout):
+        addr = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4]
+        sock = socket.create_connection(addr, timeout, self.source_address)
+        return self.context.wrap_socket(sock, server_hostname=self._host)
+
+
+class _IPv4SMTP(smtplib.SMTP):
+    """Plain SMTP (for STARTTLS) that connects over IPv4 only."""
+
+    def _get_socket(self, host, port, timeout):
+        addr = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4]
+        return socket.create_connection(addr, timeout, self.source_address)
 
 
 def send_otp_email(
@@ -56,14 +83,38 @@ def send_otp_email(
     )
 
     context = ssl.create_default_context()
+
+    def _login_and_send(server: smtplib.SMTP) -> None:
+        server.login(config.GMAIL_ADDRESS, config.GMAIL_APP_PASSWORD)
+        server.send_message(msg)
+
+    auth_msg = (
+        "Gmail rejected the login. Check GMAIL_ADDRESS and that "
+        "GMAIL_APP_PASSWORD is a valid App Password."
+    )
+
+    # Primary: implicit TLS on 465. Bad credentials fail the same way on any
+    # port, so surface that immediately instead of retrying.
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-            server.login(config.GMAIL_ADDRESS, config.GMAIL_APP_PASSWORD)
-            server.send_message(msg)
+        with _IPv4SMTP_SSL(SMTP_HOST, 465, context=context, timeout=SMTP_TIMEOUT) as server:
+            _login_and_send(server)
+        return
     except smtplib.SMTPAuthenticationError as e:
+        raise EmailError(auth_msg) from e
+    except (OSError, smtplib.SMTPException) as primary_err:
+        pass  # likely a network/port issue — try STARTTLS on 587 below
+
+    # Fallback: STARTTLS on 587.
+    try:
+        with _IPv4SMTP(SMTP_HOST, 587, timeout=SMTP_TIMEOUT) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            _login_and_send(server)
+    except smtplib.SMTPAuthenticationError as e:
+        raise EmailError(auth_msg) from e
+    except (OSError, smtplib.SMTPException) as e:
         raise EmailError(
-            "Gmail rejected the login. Check GMAIL_ADDRESS and that "
-            "GMAIL_APP_PASSWORD is a valid App Password."
+            f"Couldn't reach Gmail SMTP on ports 465 or 587 ({e}). If this host "
+            "blocks outbound SMTP, switch to an HTTP email API (e.g. SendGrid/Resend)."
         ) from e
-    except Exception as e:  # noqa: BLE001 - surface any SMTP failure to caller
-        raise EmailError(f"Could not send email: {e}") from e
