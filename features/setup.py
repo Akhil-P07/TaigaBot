@@ -3,10 +3,14 @@
 `/setup` is the one-time command you run after inviting TaigaBot:
   • creates the Unverified / Verified / Eboard roles if missing
   • creates the #unverified, #welcome and #mod-log channels if missing
-  • locks down channels so Unverified members can only see/talk in #unverified
+  • gates every channel behind the Verified role (default-deny): @everyone can't
+    see them, only Verified/Eboard can. #unverified is the verification landing;
+    #welcome is a public, read-only entry point anyone can verify from.
   • assigns the Unverified role to EVERY existing member who isn't verified yet
 
-This is the piece that handles "the server already has a bunch of members".
+Default-deny means a member with no roles sees nothing until they verify — safe
+even if the bot was offline when they joined. Re-run any time; it's idempotent
+and migrates an existing server. This handles "the server already has members".
 """
 from __future__ import annotations
 
@@ -66,51 +70,63 @@ class Setup(commands.Cog):
         )
         steps.append(f"Roles ready: {unverified.mention}, {verified.mention}, {eboard.mention}")
 
-        # 2. Channels with permission overwrites.
-        # #unverified: ONLY unverified members can talk; verified members can't see it.
-        unverified_ow = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            unverified: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True
-            ),
-        }
-        unverified_ch = await self._ensure_channel(
-            guild, config.UNVERIFIED_CHANNEL_NAME, unverified_ow
+        # 2. Core channels. Overwrites are applied explicitly (not just on
+        #    creation) so re-running /setup migrates an existing server too.
+        # #unverified: the verification landing — only Unverified members see/talk.
+        unverified_ch = await self._ensure_channel(guild, config.UNVERIFIED_CHANNEL_NAME)
+        await unverified_ch.set_permissions(
+            guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
+        await unverified_ch.set_permissions(
+            unverified, view_channel=True, send_messages=True,
+            read_message_history=True, use_application_commands=True,
+            reason="TaigaBot setup",
+        )
+        # #welcome: visible to EVERYONE (even role-less members who joined while
+        # the bot was offline) but read-only — commands stay enabled so anyone can
+        # run /verify and /verifyhelp here. This is the universal entry point.
         welcome_ch = await self._ensure_channel(guild, config.WELCOME_CHANNEL_NAME)
-        modlog_ow = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            eboard: discord.PermissionOverwrite(view_channel=True),
-        }
-        modlog_ch = await self._ensure_channel(guild, config.MODLOG_CHANNEL_NAME, modlog_ow)
+        await welcome_ch.set_permissions(
+            guild.default_role, view_channel=True, send_messages=False,
+            add_reactions=False, use_application_commands=True,
+            reason="TaigaBot: public verification entry point",
+        )
+        # #mod-log: Eboard only.
+        modlog_ch = await self._ensure_channel(guild, config.MODLOG_CHANNEL_NAME)
+        await modlog_ch.set_permissions(
+            guild.default_role, view_channel=False, reason="TaigaBot setup"
+        )
+        await modlog_ch.set_permissions(eboard, view_channel=True, reason="TaigaBot setup")
         steps.append(
             f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, {modlog_ch.mention}"
         )
 
-        # 3. Hide every OTHER channel/category from Unverified members so they
-        #    can only SEE (and talk in) #unverified. #welcome stays visible but
-        #    read-only so new members still see the greeting. Covers categories
-        #    and voice channels too, not just text.
-        locked = 0
+        # 3. Gate every OTHER channel/category behind the Verified role
+        #    (allowlist / default-deny): @everyone can't see it, Verified and
+        #    Eboard can. A member with no roles therefore sees nothing until they
+        #    verify — safe even if the bot was offline when they joined. Covers
+        #    categories and voice channels, not just text.
+        core_ids = {unverified_ch.id, welcome_ch.id, modlog_ch.id}
+        gated = 0
         for ch in guild.channels:
-            if ch.id == unverified_ch.id:
+            if ch.id in core_ids:
                 continue
             try:
-                if ch.id == welcome_ch.id:
-                    await ch.set_permissions(
-                        unverified, view_channel=True, send_messages=False,
-                        add_reactions=False,
-                        reason="TaigaBot: welcome is read-only for unverified",
-                    )
-                else:
-                    await ch.set_permissions(
-                        unverified, view_channel=False,
-                        reason="TaigaBot: hide channels from unverified members",
-                    )
-                locked += 1
+                await ch.set_permissions(
+                    guild.default_role, view_channel=False,
+                    reason="TaigaBot: gate behind verification",
+                )
+                await ch.set_permissions(
+                    verified, view_channel=True,
+                    reason="TaigaBot: verified members can view",
+                )
+                await ch.set_permissions(
+                    eboard, view_channel=True, reason="TaigaBot: eboard can view"
+                )
+                gated += 1
             except discord.Forbidden:
                 pass
-        steps.append(f"Hid/locked {locked} other channel(s) from Unverified members.")
+        steps.append(f"Gated {gated} channel(s) behind the **{config.VERIFIED_ROLE_NAME}** role.")
 
         # 4. Assign Unverified to all existing members who aren't verified.
         assigned = 0

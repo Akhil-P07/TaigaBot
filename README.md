@@ -78,9 +78,16 @@ py bot.py
 /setup
 ```
 This creates the roles (`Unverified`, `Verified`, `Eboard`) and channels
-(`#unverified`, `#welcome`, `#mod-log`), locks the server so unverified members
-can only talk in `#unverified`, and **assigns `Unverified` to every existing
-member** who isn't verified yet.
+(`#unverified`, `#welcome`, `#mod-log`), then **gates every channel behind the
+`Verified` role** (default-deny): `@everyone` is denied view, and only
+`Verified`/`Eboard` can see them. `#unverified` is the verification landing, and
+`#welcome` is a public, read-only channel anyone can run `/verify` from. Finally
+it **assigns `Unverified` to every existing member** who isn't verified yet.
+
+Because access is driven by *having* `Verified` (not by *lacking* `Unverified`),
+a member with no roles — e.g. someone who joined while the bot was asleep — sees
+nothing until they verify. `/setup` is idempotent, so re-run it any time (e.g.
+after adding channels) to re-apply the gating.
 
 > **Important:** In *Server Settings → Roles*, drag **TaigaBot's** role **above**
 > the `Unverified`/`Verified` roles (and any reaction-role roles), or it can't

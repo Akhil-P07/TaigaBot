@@ -119,6 +119,16 @@ class Database:
         )
         return await cur.fetchone() is not None
 
+    async def student_id_is_registered(self, student_id: str) -> bool:
+        """True if any verified email shares this local part (the student ID),
+        regardless of which RIT domain it used (@rit.edu vs @g.rit.edu)."""
+        cur = await self.conn.execute(
+            "SELECT 1 FROM verified_users "
+            "WHERE lower(substr(email, 1, instr(email, '@') - 1)) = ?",
+            (student_id.lower(),),
+        )
+        return await cur.fetchone() is not None
+
     async def user_is_verified(self, discord_id: int) -> bool:
         cur = await self.conn.execute(
             "SELECT 1 FROM verified_users WHERE discord_id = ?", (discord_id,)

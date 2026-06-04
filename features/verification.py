@@ -50,6 +50,15 @@ def _valid_domain(email: str) -> bool:
     return m.group(1).lower() in config.ALLOWED_EMAIL_DOMAINS
 
 
+def _student_id(email: str) -> str:
+    """The local part before '@' — the RIT student-id token, lowercased.
+
+    Identity is keyed on this, so axp1234@rit.edu and axp1234@g.rit.edu are
+    treated as the same student (can't double-verify across the two domains).
+    """
+    return email.strip().lower().split("@", 1)[0]
+
+
 class Verification(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -71,8 +80,11 @@ class Verification(commands.Cog):
         email = email.strip().lower()
         name = name.strip()
 
-        # Already verified?
+        # Already verified (anywhere this bot runs)? Just make sure the roles are
+        # right in this guild — no OTP needed.
         if await self.bot.db.user_is_verified(member.id):
+            if isinstance(member, discord.Member):
+                await gu.promote_to_verified(member)
             await interaction.response.send_message(
                 "✅ You're already verified! Welcome back.", ephemeral=True
             )
@@ -93,10 +105,10 @@ class Verification(commands.Cog):
             )
             return
 
-        # One account per email.
-        if await self.bot.db.email_is_registered(email):
+        # One account per student ID (both RIT domains count as the same person).
+        if await self.bot.db.student_id_is_registered(_student_id(email)):
             await interaction.response.send_message(
-                "❌ That email is already linked to another verified member. "
+                "❌ That RIT account is already linked to another verified member. "
                 "If this is a mistake, contact an Eboard member.",
                 ephemeral=True,
             )
@@ -164,11 +176,11 @@ class Verification(commands.Cog):
             )
             return
 
-        # Re-check the email wasn't claimed between /verify and /confirm.
-        if await self.bot.db.email_is_registered(p.email):
+        # Re-check the student ID wasn't claimed between /verify and /confirm.
+        if await self.bot.db.student_id_is_registered(_student_id(p.email)):
             del self.pending[member.id]
             await interaction.response.send_message(
-                "❌ That email was just registered by someone else.", ephemeral=True
+                "❌ That RIT account was just registered by someone else.", ephemeral=True
             )
             return
 
@@ -183,15 +195,8 @@ class Verification(commands.Cog):
         )
         del self.pending[member.id]
 
-        # Swap roles.
-        unverified = gu.unverified_role(guild)
-        verified = gu.verified_role(guild)
-        try:
-            if verified and verified not in member.roles:
-                await member.add_roles(verified, reason="Verified via TaigaBot")
-            if unverified and unverified in member.roles:
-                await member.remove_roles(unverified, reason="Verified via TaigaBot")
-        except discord.Forbidden:
+        # Swap roles (Unverified → Verified).
+        if not await gu.promote_to_verified(member):
             await interaction.followup.send(
                 "✅ Verified in the database, but I couldn't change your roles "
                 "(my role may be too low). Ping an Eboard member.",

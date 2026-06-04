@@ -48,8 +48,12 @@ class Welcome(commands.Cog):
             return
         guild = member.guild
 
-        # Assign Unverified automatically (unless already verified in DB).
-        if not await self.bot.db.user_is_verified(member.id):
+        # If they verified before (anywhere this bot runs), restore access
+        # instantly — no Unverified role, no OTP. Otherwise gate them as new.
+        already_verified = await self.bot.db.user_is_verified(member.id)
+        if already_verified:
+            await gu.promote_to_verified(member)
+        else:
             unverified = gu.unverified_role(guild)
             if unverified:
                 try:
@@ -60,25 +64,30 @@ class Welcome(commands.Cog):
         # Public welcome.
         welcome = gu.welcome_channel(guild)
         if welcome:
+            if already_verified:
+                desc = (
+                    f"Welcome back {member.mention}! 🎉 You're already verified — "
+                    f"full access restored."
+                )
+            else:
+                desc = (
+                    f"Welcome {member.mention}! 🎉 Verify with `/verify` to unlock "
+                    f"the server. Check your DMs for instructions."
+                )
             try:
                 await welcome.send(
                     content=member.mention,
-                    embed=discord.Embed(
-                        description=(
-                            f"Welcome {member.mention}! 🎉 Verify with `/verify` to unlock "
-                            f"the server. Check your DMs for instructions."
-                        ),
-                        color=config.BOT_COLOR,
-                    ),
+                    embed=discord.Embed(description=desc, color=config.BOT_COLOR),
                 )
             except discord.HTTPException:
                 pass
 
-        # DM walkthrough.
-        try:
-            await member.send(embed=onboarding_embed(guild.name))
-        except discord.HTTPException:
-            pass  # DMs closed
+        # DM the verification walkthrough only to members who still need it.
+        if not already_verified:
+            try:
+                await member.send(embed=onboarding_embed(guild.name))
+            except discord.HTTPException:
+                pass  # DMs closed
 
     @app_commands.command(
         name="verifyhelp", description="Show how to verify your university email."

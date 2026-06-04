@@ -43,6 +43,24 @@ def modlog_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return get_channel(guild, config.MODLOG_CHANNEL_NAME)
 
 
+async def promote_to_verified(member: discord.Member) -> bool:
+    """Give the member the Verified role and strip Unverified, in their guild.
+
+    Returns False if the bot lacks permission (its role is too low). Safe to call
+    when the member is already verified — it just ensures the roles are right.
+    """
+    verified = verified_role(member.guild)
+    unverified = unverified_role(member.guild)
+    try:
+        if verified and verified not in member.roles:
+            await member.add_roles(verified, reason="TaigaBot: verified")
+        if unverified and unverified in member.roles:
+            await member.remove_roles(unverified, reason="TaigaBot: verified")
+        return True
+    except discord.Forbidden:
+        return False
+
+
 async def log_mod_action(guild: discord.Guild, embed: discord.Embed) -> None:
     """Post an embed to the mod-log channel if it exists."""
     ch = modlog_channel(guild)
