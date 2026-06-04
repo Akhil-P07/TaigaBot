@@ -43,6 +43,16 @@ class Setup(commands.Cog):
             )
         return ch
 
+    @staticmethod
+    async def _set_perms(channel, target, **perms) -> bool:
+        """set_permissions that returns False instead of raising when the bot
+        can't edit this channel (e.g. a private channel it has no access to)."""
+        try:
+            await channel.set_permissions(target, **perms)
+            return True
+        except (discord.Forbidden, discord.HTTPException):
+            return False
+
     @app_commands.command(
         name="setup",
         description="Create TaigaBot's roles/channels and assign Unverified to existing members.",
@@ -56,6 +66,28 @@ class Setup(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # 0. Bail early with a clear message if the bot lacks the permissions it
+        #    needs — otherwise the first API call fails with a cryptic 403.
+        perms = guild.me.guild_permissions
+        missing = [
+            label for label, ok in (
+                ("Manage Roles", perms.manage_roles),
+                ("Manage Channels", perms.manage_channels),
+            ) if not ok
+        ]
+        if missing:
+            await interaction.followup.send(
+                f"⛔ I'm missing the **{', '.join(missing)}** permission(s), so I "
+                "can't set up the server.\n\n"
+                "Fix: in **Server Settings → Roles**, give TaigaBot's role those "
+                "permissions and drag it **above** the Unverified/Verified roles, "
+                "then re-run `/setup`. (Re-inviting with the correct OAuth link also "
+                "works.)",
+                ephemeral=True,
+            )
+            return
+
         steps: list[str] = []
 
         # 1. Roles
@@ -74,11 +106,11 @@ class Setup(commands.Cog):
         #    creation) so re-running /setup migrates an existing server too.
         # #unverified: the verification landing — only Unverified members see/talk.
         unverified_ch = await self._ensure_channel(guild, config.UNVERIFIED_CHANNEL_NAME)
-        await unverified_ch.set_permissions(
-            guild.default_role, view_channel=False, reason="TaigaBot setup"
+        await self._set_perms(
+            unverified_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
-        await unverified_ch.set_permissions(
-            unverified, view_channel=True, send_messages=True,
+        await self._set_perms(
+            unverified_ch, unverified, view_channel=True, send_messages=True,
             read_message_history=True, use_application_commands=True,
             reason="TaigaBot setup",
         )
@@ -86,17 +118,17 @@ class Setup(commands.Cog):
         # the bot was offline) but read-only — commands stay enabled so anyone can
         # run /verify and /verifyhelp here. This is the universal entry point.
         welcome_ch = await self._ensure_channel(guild, config.WELCOME_CHANNEL_NAME)
-        await welcome_ch.set_permissions(
-            guild.default_role, view_channel=True, send_messages=False,
+        await self._set_perms(
+            welcome_ch, guild.default_role, view_channel=True, send_messages=False,
             add_reactions=False, use_application_commands=True,
             reason="TaigaBot: public verification entry point",
         )
         # #mod-log: Eboard only.
         modlog_ch = await self._ensure_channel(guild, config.MODLOG_CHANNEL_NAME)
-        await modlog_ch.set_permissions(
-            guild.default_role, view_channel=False, reason="TaigaBot setup"
+        await self._set_perms(
+            modlog_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
-        await modlog_ch.set_permissions(eboard, view_channel=True, reason="TaigaBot setup")
+        await self._set_perms(modlog_ch, eboard, view_channel=True, reason="TaigaBot setup")
         steps.append(
             f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, {modlog_ch.mention}"
         )
@@ -108,25 +140,32 @@ class Setup(commands.Cog):
         #    categories and voice channels, not just text.
         core_ids = {unverified_ch.id, welcome_ch.id, modlog_ch.id}
         gated = 0
+        skipped = 0
         for ch in guild.channels:
             if ch.id in core_ids:
                 continue
-            try:
-                await ch.set_permissions(
-                    guild.default_role, view_channel=False,
-                    reason="TaigaBot: gate behind verification",
-                )
-                await ch.set_permissions(
-                    verified, view_channel=True,
-                    reason="TaigaBot: verified members can view",
-                )
-                await ch.set_permissions(
-                    eboard, view_channel=True, reason="TaigaBot: eboard can view"
-                )
+            ok = await self._set_perms(
+                ch, guild.default_role, view_channel=False,
+                reason="TaigaBot: gate behind verification",
+            )
+            ok &= await self._set_perms(
+                ch, verified, view_channel=True,
+                reason="TaigaBot: verified members can view",
+            )
+            ok &= await self._set_perms(
+                ch, eboard, view_channel=True, reason="TaigaBot: eboard can view"
+            )
+            if ok:
                 gated += 1
-            except discord.Forbidden:
-                pass
-        steps.append(f"Gated {gated} channel(s) behind the **{config.VERIFIED_ROLE_NAME}** role.")
+            else:
+                skipped += 1
+        msg = f"Gated {gated} channel(s) behind the **{config.VERIFIED_ROLE_NAME}** role."
+        if skipped:
+            msg += (
+                f" ⚠️ Skipped {skipped} channel(s) I couldn't edit — check that my "
+                "role is high enough and that I can access them."
+            )
+        steps.append(msg)
 
         # 4. Assign Unverified to all existing members who aren't verified.
         assigned = 0
