@@ -4,6 +4,9 @@
   → category picker → creates a role (given to the leads), a gated channel, an
   intro embed, and a DB record. Joining is via /joinproject (lead approval), so
   no self-assign reaction role is created.
+  If the name already matches an existing project, NO new channel is made —
+  instead the Eboard picks the existing role's @ (and any leads) and the bot
+  links them to the existing channel/record.
 
 /dropproject (Eboard): select from DB-tracked projects to delete channel + role.
 
@@ -311,6 +314,59 @@ class _CategoryView(discord.ui.View):
         self.stop()
 
 
+# ── Link-existing picker (shown when the project name already exists) ─────────
+
+class _LinkRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="Pick the project's role…", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class _LinkView(discord.ui.View):
+    """Shown when /createproject is used with a name that already exists. Instead
+    of making a new channel, the Eboard picks the existing role's @ (and optionally
+    extra leads); we then attach that role and add the lead(s) to the project."""
+
+    def __init__(self, primary_lead: discord.Member):
+        super().__init__(timeout=120)
+        self.primary_lead = primary_lead
+        self.role_select = _LinkRoleSelect()
+        self.add_item(self.role_select)
+        self.lead_select = _LeadSelect()
+        self.add_item(self.lead_select)
+        self.confirmed = False
+        self.role: discord.Role | None = None
+        self.leads: list[discord.Member] = [primary_lead]
+
+    @discord.ui.button(label="Link project", style=discord.ButtonStyle.green, row=2)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.role_select.values:
+            await interaction.response.send_message(
+                "Pick the project's role first.", ephemeral=True
+            )
+            return
+        self.role = self.role_select.values[0]
+        chosen = {self.primary_lead.id: self.primary_lead}
+        for m in self.lead_select.values:
+            if not m.bot:
+                chosen.setdefault(m.id, m)
+        self.leads = list(chosen.values())
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="🔗 Linking project…", view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, row=2)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="❌ Cancelled.", view=self)
+        self.stop()
+
+
 # ── /createproject modal ─────────────────────────────────────────────────────
 
 class _ProjectModal(discord.ui.Modal, title="Create a new project"):
@@ -339,6 +395,15 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
 
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
+        name = self.project_name.value.strip()
+
+        # If a project with this name already exists, don't make a new channel —
+        # link to the existing one: ask for the role @ and the lead instead.
+        existing = await self._find_existing(guild.id, name)
+        if existing is not None:
+            await self._link_existing(interaction, guild, existing)
+            return
+
         tags_fmt = _fmt_tags(self.tags.value or "")
         view = _CategoryView(guild.categories, self.lead)
         await interaction.response.send_message(
@@ -354,6 +419,64 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
             return
 
         await self._create(interaction, guild, view.leads, view.category_value)
+
+    async def _find_existing(self, guild_id: int, name: str):
+        """Return the DB row for a project with this (case-insensitive) name in
+        the guild, or None. Source of truth is the project database."""
+        name_l = name.lower()
+        for row in await self.bot.db.list_projects(guild_id):
+            if (row["name"] or "").strip().lower() == name_l:
+                return row
+        return None
+
+    async def _link_existing(self, interaction: discord.Interaction, guild: discord.Guild, existing):
+        """Project name already exists: reuse its channel, attach a role the
+        Eboard picks, add the lead(s), and update the DB record. No new channel
+        or role is created."""
+        name = existing["name"]
+        view = _LinkView(self.lead)
+        await interaction.response.send_message(
+            f"⚠️ A project named **{name}** already exists — I won't create a new "
+            f"channel.\nPick its **role** to attach (and add co-leads if you want), "
+            f"then **Link project**.",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.confirmed or view.role is None:
+            return
+
+        role = view.role
+        leads = view.leads
+
+        # Give every lead the project role.
+        for lead in leads:
+            try:
+                if role not in lead.roles:
+                    await lead.add_roles(role, reason=f"Team lead of {name}")
+            except discord.Forbidden:
+                pass
+
+        # Merge new lead(s) into the existing lead list (existing primary kept).
+        merged = list(dict.fromkeys(_parse_leads(existing) + [m.id for m in leads]))
+
+        # Update the DB record in place (same channel_id PK → INSERT OR REPLACE),
+        # keeping the existing description and tags.
+        await self.bot.db.add_project(
+            existing["channel_id"], guild.id, name, role.id, merged,
+            existing["description"], existing["tags"],
+        )
+
+        channel = guild.get_channel(existing["channel_id"])
+        ch_ref = channel.mention if channel else f"`#{_channel_name(name)}` *(channel missing)*"
+        leads_str = ", ".join(m.mention for m in leads)
+        await interaction.followup.send(
+            f"🔗 Linked **{name}** to {role.mention} — no new channel created.\n"
+            f"• Channel: {ch_ref} (reused)\n"
+            f"• Lead(s) added: {leads_str} (role granted)\n"
+            f"Members still join via `/joinproject`.",
+            ephemeral=True,
+        )
 
     async def _create(
         self,
