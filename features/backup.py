@@ -1,15 +1,16 @@
-"""Off-box database backups — guards against host filesystem wipes.
+"""Off-box, per-guild database backups — guards against host filesystem wipes.
 
 A normal crash, restart, or sleep never loses data: SQLite commits to disk on
 every write, so the file is intact when the bot wakes up. The real risk is the
 host (e.g. a free Replit/Render container) being rebuilt from scratch, which
-wipes the file entirely. This feature periodically uploads a *consistent*
-snapshot of the database to a Discord channel, so the data survives even a full
-container reset — you just re-download the latest `.db` and drop it back in.
+wipes the file entirely. This feature periodically uploads a snapshot of the
+database to an Eboard-only Discord channel, so the data survives even a full
+container reset — you re-download the latest `.db` and drop it back in.
 
-⚠️ PRIVACY: the database stores verified members' real names and emails. The
-backup channel MUST be private (Eboard-only). Set `BACKUP_CHANNEL_ID` in the
-config to that channel's ID; leave it blank to disable backups entirely.
+Each guild's backup contains ONLY that guild's rows (its verified members, XP,
+warnings, settings, …) — never other servers' data — so one server's Eboard can
+never see another's names/emails. /setup creates the Eboard-only backup channel
+(named BACKUP_CHANNEL_NAME) in each server.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
+from utils import guildutils as gu
 from utils.checks import is_eboard
 
 log = logging.getLogger("taigabot.backup")
@@ -31,25 +33,36 @@ log = logging.getLogger("taigabot.backup")
 class Backup(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        if config.BACKUP_CHANNEL_ID:
-            self.auto_backup.change_interval(hours=config.BACKUP_INTERVAL_HOURS)
-            self.auto_backup.start()
-        else:
-            log.info("BACKUP_CHANNEL_ID not set — automatic backups disabled.")
+        self.auto_backup.change_interval(hours=config.BACKUP_INTERVAL_HOURS)
+        self.auto_backup.start()
 
     def cog_unload(self) -> None:
         self.auto_backup.cancel()
 
-    async def _make_and_send(self, channel: discord.abc.Messageable) -> int:
-        """Snapshot the DB to a temp file, upload it, clean up. Returns bytes."""
+    def _channel_for(self, guild: discord.Guild):
+        """The Eboard-only backup channel for this guild, or None. An explicit
+        BACKUP_CHANNEL_ID is honoured only if it lives in this same guild;
+        otherwise the channel named BACKUP_CHANNEL_NAME that /setup creates."""
+        if config.BACKUP_CHANNEL_ID:
+            ch = self.bot.get_channel(config.BACKUP_CHANNEL_ID)
+            if ch is not None and getattr(ch, "guild", None) == guild:
+                return ch
+        return gu.backups_channel(guild)
+
+    async def _backup_guild(self, guild: discord.Guild) -> int | None:
+        """Export just this guild's data and upload it to its backup channel.
+        Returns the byte size, or None if the guild has no backup channel."""
+        channel = self._channel_for(guild)
+        if channel is None:
+            return None
         ts = time.strftime("%Y%m%d-%H%M%S")
-        tmp = os.path.join(tempfile.gettempdir(), f"taigabot-{ts}.db")
-        await self.bot.db.snapshot(tmp)
+        tmp = os.path.join(tempfile.gettempdir(), f"taigabot-{guild.id}-{ts}.db")
+        await self.bot.db.export_guild(guild.id, tmp)
         size = os.path.getsize(tmp)
         try:
             await channel.send(
-                content=f"🗄️ Database backup — {ts} ({size / 1024:.0f} KB)",
-                file=discord.File(tmp, filename=f"taigabot-{ts}.db"),
+                content=f"🗄️ Backup for **{guild.name}** — {ts} ({size / 1024:.0f} KB)",
+                file=discord.File(tmp, filename=f"taigabot-{guild.id}-{ts}.db"),
             )
         finally:
             os.remove(tmp)
@@ -57,52 +70,54 @@ class Backup(commands.Cog):
 
     @tasks.loop(hours=12)  # real interval set from config in __init__
     async def auto_backup(self) -> None:
-        channel = self.bot.get_channel(config.BACKUP_CHANNEL_ID)
-        if channel is None:
-            log.warning(
-                "Backup channel %s not found (is the bot in that guild?); skipping.",
-                config.BACKUP_CHANNEL_ID,
+        backed_up = 0
+        for guild in self.bot.guilds:
+            try:
+                if await self._backup_guild(guild) is not None:
+                    backed_up += 1
+            except Exception:  # noqa: BLE001
+                log.exception("Automatic backup failed for guild %s.", guild.id)
+        if backed_up:
+            log.info("Uploaded per-guild backups for %d guild(s).", backed_up)
+        else:
+            log.info(
+                "No backup channels yet (run /setup to create #%s); skipping.",
+                config.BACKUP_CHANNEL_NAME,
             )
-            return
-        try:
-            size = await self._make_and_send(channel)
-            log.info("Database backup uploaded (%d bytes).", size)
-        except Exception:  # noqa: BLE001
-            log.exception("Automatic database backup failed.")
 
     @auto_backup.before_loop
     async def _before_auto_backup(self) -> None:
         await self.bot.wait_until_ready()
 
     @app_commands.command(
-        name="backup", description="Back up the database to the backup channel now (Eboard only)."
+        name="backup",
+        description="Back up THIS server's data to its backup channel now (Eboard only).",
     )
     @is_eboard()
     async def backup_now(self, interaction: discord.Interaction) -> None:
-        if not config.BACKUP_CHANNEL_ID:
-            await interaction.response.send_message(
-                "⚠️ Backups are disabled — set `BACKUP_CHANNEL_ID` in the bot's config first.",
-                ephemeral=True,
-            )
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Run this in a server.", ephemeral=True)
             return
-        channel = self.bot.get_channel(config.BACKUP_CHANNEL_ID)
-        if channel is None:
+        if self._channel_for(guild) is None:
             await interaction.response.send_message(
-                f"⚠️ Backup channel (`{config.BACKUP_CHANNEL_ID}`) not found.",
+                f"⚠️ No backup channel here. Run `/setup` to create the "
+                f"`#{config.BACKUP_CHANNEL_NAME}` channel first.",
                 ephemeral=True,
             )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            size = await self._make_and_send(channel)
+            size = await self._backup_guild(guild)
         except Exception:  # noqa: BLE001
-            log.exception("Manual database backup failed.")
+            log.exception("Manual backup failed for guild %s.", guild.id)
             await interaction.followup.send(
                 "⚠️ Backup failed — check the bot logs.", ephemeral=True
             )
             return
         await interaction.followup.send(
-            f"✅ Backup uploaded to <#{config.BACKUP_CHANNEL_ID}> ({size / 1024:.0f} KB).",
+            f"✅ Backed up **{guild.name}**'s data to "
+            f"{self._channel_for(guild).mention} ({size / 1024:.0f} KB).",
             ephemeral=True,
         )
 

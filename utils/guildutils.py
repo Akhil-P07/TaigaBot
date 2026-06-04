@@ -43,6 +43,10 @@ def modlog_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return get_channel(guild, config.MODLOG_CHANNEL_NAME)
 
 
+def backups_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    return get_channel(guild, config.BACKUP_CHANNEL_NAME)
+
+
 async def promote_to_verified(member: discord.Member) -> bool:
     """Give the member the Verified role and strip Unverified, in their guild.
 

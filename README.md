@@ -167,21 +167,35 @@ Restart the bot — it's loaded automatically. Use `self.bot.db` for storage and
 All data is stored locally in `taigabot.db` (SQLite): verified members'
 name/email/Discord ID, automod settings, XP, warnings, and reaction-role bindings.
 The DB and `.env` are git-ignored. Since you collect real names and emails, only
-give Eboard access to the server host and the `#mod-log` channel.
+give Eboard access to the server host and the `#mod-log` / `#taiga-backups`
+channels.
 
 ### Backups (recommended on free hosts)
 
 A crash, restart, or sleep **never** loses data — SQLite commits every write to
 disk. The one real risk is the host rebuilding its container and wiping the file
-(e.g. a Replit rebuild or a Deployment). To guard against that, set
-`BACKUP_CHANNEL_ID` to a **private, Eboard-only** channel: the bot uploads a
-consistent snapshot of the DB there every `BACKUP_INTERVAL_HOURS` (default 12),
-and Eboard can run `/backup` to snapshot on demand. To restore, download the
-latest `taigabot.db` attachment and put it at the bot's `DB_PATH`.
+(e.g. a Replit rebuild or a Deployment). Backups guard against that, and they
+work automatically:
 
-> ⚠️ The snapshot is the full database, including real names and emails. Never
-> point `BACKUP_CHANNEL_ID` at a channel non-Eboard members can read. The file
-> is plain SQLite (unencrypted).
+- `/setup` creates a private, **Eboard-only** channel called `#taiga-backups`
+  (name configurable via `BACKUP_CHANNEL_NAME`).
+- Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads a `.db` snapshot to
+  that channel. Eboard can also run `/backup` to snapshot on demand.
+- **Per-server:** each server's backup contains *only that server's* rows
+  (its verified members, XP, warnings, settings, reaction roles) — never any
+  other server's data. So one server's Eboard can never see another's
+  names/emails.
+- **Restore:** download the latest `.db` attachment from `#taiga-backups`. It's
+  a standalone SQLite database of that server's data; merge/import it into the
+  bot's `DB_PATH` (or hand it to whoever maintains the bot).
+
+> ⚠️ A backup file still contains real names and emails for that server. Keep
+> `#taiga-backups` Eboard-only (the `/setup` lockdown does this), and don't move
+> it somewhere non-Eboard members can read. The file is plain SQLite
+> (unencrypted).
+>
+> `BACKUP_CHANNEL_ID` is an optional override to send a guild's backups to a
+> specific channel by ID instead of the auto-created one.
 
 ## Project layout
 ```

@@ -134,8 +134,15 @@ class Setup(commands.Cog):
             modlog_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
         await self._set_perms(modlog_ch, eboard, view_channel=True, reason="TaigaBot setup")
+        # #taiga-backups: Eboard only — holds DB snapshots (names + emails).
+        backups_ch = await self._ensure_channel(guild, config.BACKUP_CHANNEL_NAME)
+        await self._set_perms(
+            backups_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
+        )
+        await self._set_perms(backups_ch, eboard, view_channel=True, reason="TaigaBot setup")
         steps.append(
-            f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, {modlog_ch.mention}"
+            f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, "
+            f"{modlog_ch.mention}, {backups_ch.mention}"
         )
 
         # 3. Gate every OTHER channel/category behind the Verified role
@@ -143,7 +150,7 @@ class Setup(commands.Cog):
         #    Eboard can. A member with no roles therefore sees nothing until they
         #    verify — safe even if the bot was offline when they joined. Covers
         #    categories and voice channels, not just text.
-        core_ids = {unverified_ch.id, welcome_ch.id, modlog_ch.id}
+        core_ids = {unverified_ch.id, welcome_ch.id, modlog_ch.id, backups_ch.id}
         gated = 0
         skipped_names: list[str] = []
         for ch in guild.channels:

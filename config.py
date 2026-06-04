@@ -38,13 +38,15 @@ VERIFIED_ROLE_NAME: str = _get("VERIFIED_ROLE_NAME", "Verified")
 UNVERIFIED_CHANNEL_NAME: str = _get("UNVERIFIED_CHANNEL_NAME", "unverified")
 WELCOME_CHANNEL_NAME: str = _get("WELCOME_CHANNEL_NAME", "welcome")
 MODLOG_CHANNEL_NAME: str = _get("MODLOG_CHANNEL_NAME", "mod-log")
+BACKUP_CHANNEL_NAME: str = _get("BACKUP_CHANNEL_NAME", "taiga-backups")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH: str = _get("DB_PATH", "taigabot.db")
 
 # ── Backups ──────────────────────────────────────────────────────────────────
-# Channel ID the bot uploads database snapshots to. MUST be a private,
-# Eboard-only channel — the DB contains real names and emails. Blank = disabled.
+# /setup auto-creates an Eboard-only channel named BACKUP_CHANNEL_NAME and the
+# bot uploads DB snapshots there. BACKUP_CHANNEL_ID is an optional override to
+# point backups at a specific channel by ID instead of resolving by name.
 BACKUP_CHANNEL_ID: int | None = (
     int(_get("BACKUP_CHANNEL_ID")) if _get("BACKUP_CHANNEL_ID").isdigit() else None
 )
