@@ -199,12 +199,17 @@ work automatically:
 
 - `/setup` creates a private, **Eboard-only** channel called `#taiga-backups`
   (name configurable via `BACKUP_CHANNEL_NAME`).
-- Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads a `.db` snapshot to
-  that channel. Eboard can also run `/backup` to snapshot on demand.
+- Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads two files to that
+  channel: a `.db` snapshot and a **roster CSV** of the guild's current members
+  who hold the Verified role or are admins (with their name/email where on
+  record). Eboard can also run `/backup` to snapshot on demand.
 - **Per-server:** each server's backup contains *only that server's* rows
   (its verified members, XP, warnings, settings, reaction roles) — never any
   other server's data. So one server's Eboard can never see another's
   names/emails.
+- **Trigger from a shell:** run `python backup_now.py` (e.g. in the Replit
+  Shell) to upload a backup immediately without waiting for the timer;
+  `GID=<server id> python backup_now.py` limits it to one server.
 - **Restore:** download the latest `.db` attachment from `#taiga-backups`. It's
   a standalone SQLite database of that server's data; merge/import it into the
   bot's `DB_PATH` (or hand it to whoever maintains the bot).
