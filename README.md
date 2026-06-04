@@ -1,17 +1,17 @@
 # 🐯 TaigaBot
 
-A Discord moderation + verification bot for the **RIT AI Club**, with a mean
-personality, university-email verification, auto-moderation, leveling, AI/ML
-commands, and reaction roles.
+A Discord bot for the **RIT AI Club**: university-email verification, channel
+gating, auto-moderation, leveling, reaction roles, a project system, an AI
+assistant, automatic backups, and a tsundere personality.
 
 Every feature is a self-contained module in [`features/`](features/) that the bot
-auto-loads on startup, so you can add or remove features just by adding/deleting
+auto-loads on startup, so you add or remove features just by adding/deleting
 files there.
 
 **Multi-guild:** slash commands sync globally, so the bot works in **every server
-it's invited to**. All per-server data (XP, warnings, banned words, automod
-settings, reaction roles) is keyed by guild, and roles/channels are resolved by
-name within each guild. One exception — see the verification note below.
+it's invited to**. Per-server data (XP, warnings, banned words, automod settings,
+reaction roles, projects) is keyed by guild. One exception — see the verification
+note below.
 
 ---
 
@@ -19,21 +19,22 @@ name within each guild. One exception — see the verification note below.
 
 | Feature | File | Commands |
 |---|---|---|
-| **Setup** | `features/setup.py` | `/setup`, `/health` |
+| **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/whois` (Eboard), `/unverify` (Eboard) |
-| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` |
+| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
-| **Tsundere personality** | `features/personality.py` | `/taiga`, `/hello` |
-| **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
+| **Projects** | `features/projects.py` | `/createproject`, `/dropproject` (Eboard), `/joinproject`, `/projects` |
+| **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
+| **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
 | **Backups** | `features/backup.py` | `/backup` (Eboard) |
-| **Projects** | `features/projects.py` | `/createproject`, `/dropproject` (Eboard), `/joinproject`, `/projects` |
+| **Tsundere personality** | `features/personality.py` | `/taiga`, `/hello` |
 | **Help** | `features/help.py` | `/help` |
 
-All moderation/admin commands check the caller's **Eboard** role (server admins
-always pass). `/help` is open to everyone but shows the full Eboard reference
-only to Eboard/admins, and the member command list to everyone else.
+Moderation/admin commands require the **Eboard** role (server admins always pass).
+`/help` is open to everyone, but shows the full Eboard reference only to
+Eboard/admins and the member list to everyone else.
 
 ---
 
@@ -45,202 +46,177 @@ py -m pip install -r requirements.txt
 ```
 
 ### 2. Create the Discord application
-1. Go to <https://discord.com/developers/applications> → **New Application**.
-2. **Bot** tab → **Reset Token** → copy it into `.env` as `DISCORD_TOKEN`.
+1. <https://discord.com/developers/applications> → **New Application**.
+2. **Bot** tab → **Reset Token** → copy into `DISCORD_TOKEN`.
 3. Under **Privileged Gateway Intents**, enable **SERVER MEMBERS INTENT** and
-   **MESSAGE CONTENT INTENT** (both are required).
-4. To let the bot run on servers other than your own, enable **Public Bot** on the
-   **Bot** tab. (Discord requires app verification once you pass **100 servers** to
-   keep the privileged intents above.)
-5. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`;
-   bot permissions: *Manage Roles, Manage Channels, **View Channels**, **Use
+   **MESSAGE CONTENT INTENT** (both required).
+4. To run on servers other than your own, enable **Public Bot**. (Discord requires
+   app verification past **100 servers** to keep the privileged intents.)
+5. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`; bot
+   permissions: *Manage Roles, Manage Channels, **View Channels**, **Use
    Application Commands**, Kick, Ban, Moderate Members, Manage Messages, Send
-   Messages, Add Reactions, Embed Links, Read Message History*. Open (or share)
-   the generated URL to invite the bot to any server.
+   Messages, Add Reactions, Embed Links, Read Message History*. Open/share the URL
+   to invite the bot.
 
    > **View Channels** and **Use Application Commands** are easy to miss but
-   > **required**: Discord only lets a bot edit a channel's `view_channel` /
-   > `use_application_commands` overwrites if the bot *holds* those permissions
-   > itself. Without them, `/setup` can't gate channels and you'll see
-   > "Missing Access" errors.
+   > **required** — Discord only lets a bot edit a channel's `view_channel` /
+   > `use_application_commands` overwrites if the bot *holds* those permissions.
+   > Without them, `/setup` can't gate channels ("Missing Access").
 
 ### 3. Gmail for OTP emails
-1. Use/create a Gmail account for the bot and enable **2-Step Verification**.
-2. Create an **App Password** at <https://myaccount.google.com/apppasswords>.
-3. Put the address + 16-char app password in `.env`
-   (`GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`).
+Create/choose a Gmail for the bot, enable **2-Step Verification**, make an **App
+Password** at <https://myaccount.google.com/apppasswords>, and put the address +
+16-char password in `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD`. (Don't use your RIT
+account — Workspace accounts usually block app passwords.)
 
 ### 4. Configure
 ```powershell
 copy .env.example .env
-# then edit .env (token, gmail). GUILD_ID is optional — set it to a test server
-# for instant command updates; leave blank in production (commands sync globally).
 ```
+Edit `.env` (token, Gmail). Everything else has sensible defaults. Optional:
+`GEMINI_API_KEY` to enable `/ask` (free key at
+<https://aistudio.google.com/apikey>). `GUILD_ID` gives one server instant command
+updates while developing; leave blank in production.
 
 ### 5. Run
 ```powershell
 py bot.py
 ```
 
-### 6. In Discord, as the server owner or an administrator, run once:
-```
-/setup
-```
-`/setup` can only be run by the **server owner or a member with the
-Administrator permission** (not all Eboard members), since it reshapes the whole
-server.
+### 6. In Discord, as the server owner or an administrator, run `/setup` once.
+`/setup` can only be run by the **server owner or an administrator** (not all
+Eboard members), since it reshapes the whole server. It's interactive: it shows a
+menu to **exclude** any categories/channels from gating and a toggle for the
+**role reset** (both below), then runs.
 
 It creates the roles (`Unverified`, `Verified`, `Eboard`) and channels
 (`#unverified`, `#welcome`, `#mod-log`, `#taiga-backups`, `#roles`), then **gates
 every channel behind the `Verified` role** (default-deny): `@everyone` is denied
-view, and only `Verified`/`Eboard` can see them. `#unverified` is the
-verification landing, `#welcome` is a public, read-only channel anyone can run
-`/verify` from, and `#roles` is where verified members self-assign interest roles
-(set them up with `/reactionrole`). Finally it **assigns `Unverified` to every
-existing member** who isn't verified yet.
+view; only `Verified`/`Eboard` can see them. `#unverified` is the verification
+landing, `#welcome` is a public read-only channel anyone can `/verify` from, and
+`#roles` is where verified members self-assign roles. Finally it assigns
+`Unverified` to every member who isn't verified yet.
 
-Because access is driven by *having* `Verified` (not by *lacking* `Unverified`),
-a member with no roles — e.g. someone who joined while the bot was asleep — sees
-nothing until they verify. `/setup` is idempotent, so re-run it any time (e.g.
-after adding channels) to re-apply the gating.
+Access is driven by *having* `Verified`, so a member with no roles (e.g. someone
+who joined while the bot was asleep) sees nothing until they verify. `/setup` is
+idempotent — re-run any time.
 
-#### Optional: fresh-start role reset (`RESET_ROLES_ON_SETUP`)
-If you're adding TaigaBot to an **existing** server where members already hold
-self-assign/interest roles that grant channel access, gating alone won't lock
-them out — Discord lets a role's "allow view" override the `@everyone` deny, so
-those members keep access without verifying. Set `RESET_ROLES_ON_SETUP=1` to make
-`/setup` first **remove every member's roles** (except `Eboard`, `Verified`,
-`Unverified`, bot-managed roles, and any role above TaigaBot) so nobody keeps old
-access until they re-verify and re-pick their roles in `#roles`.
+> **Important:** drag **TaigaBot's role above** `Unverified`/`Verified`/project
+> roles in *Server Settings → Roles*, or it can't manage them. `/setup` checks
+> its own permissions first and reports which channels it gated or skipped.
+>
+> **Already-private channels** (those that already deny `@everyone` view) are
+> invisible to the bot and can't be gated — they show under "Couldn't edit …".
+> Grant TaigaBot **View Channel** on them, or run `/setup` once with the bot
+> temporarily set to Administrator, then re-run.
 
-> ⚠️ **Destructive and irreversible** — it wipes all members' role selections,
-> and it runs on **every** `/setup`. Intended use: set `RESET_ROLES_ON_SETUP=1`,
-> run `/setup` once, then set it back to `0`. Leave it off (the default) for
-> normal servers.
+#### Excluding channels/categories from gating
+By default every channel is gated to `Verified`. To keep a category gated by
+**project/interest roles** instead, exclude it: pick it in the `/setup` menu, or
+list its ID in `GATING_IGNORE` (a category ID skips all channels inside). Excluded
+channels are never touched, even on re-runs. The **Projects** system (below)
+relies on this.
 
-#### Optional: exclude channels/categories from gating (`GATING_IGNORE`)
-By default `/setup` grants `Verified` view on **every** channel. If you have a
-category you'd rather gate behind **interest/project roles** (not just
-verification), list its **ID** in `GATING_IGNORE` (comma-separated; a category
-ID skips every channel inside it). `/setup` then leaves those channels' perms
-entirely alone — and won't clobber them on re-runs.
+#### Fresh-start role reset (destructive)
+If you're adding TaigaBot to an existing server where members already hold roles
+that grant channel access, gating alone won't lock them out (Discord lets a role's
+"allow view" beat the `@everyone` deny). Toggle **Role reset** in the `/setup`
+menu (or set `RESET_ROLES_ON_SETUP=1`) to first **remove every member's roles**
+(except `Eboard`/`Verified`/`Unverified`, bot-managed roles, and roles above
+TaigaBot) so nobody keeps old access until they re-verify and re-pick in `#roles`.
 
-Typical setup for a Projects/Interests category, done by hand once it's excluded:
-on the **category**, deny View Channel for `@everyone` **and** `Verified`; on
-each project channel, **allow** View Channel for that project's role. Because an
-allow overrides a deny, a verified member sees a project channel only once they
-pick its role in `#roles` — while staying hidden from everyone else.
-
-> Get an ID with **right-click → Copy Channel/Category ID** (Developer Mode on).
-> For the inheritance to work, keep the project channels **synced** to the
-> category (right-click a channel → *Sync permissions to category*).
-
-> **Important:** In *Server Settings → Roles*, drag **TaigaBot's** role **above**
-> the `Unverified`/`Verified` roles (and any reaction-role roles), or it can't
-> manage them.
-
-`/setup` checks its own permissions first and tells you if any are missing, and
-it reports exactly which channels it gated or had to skip.
-
-> **Already-private channels:** a channel that already denies `@everyone` the
-> View Channel permission is invisible to the bot, so it can't gate it (you'll
-> see it listed under "Couldn't edit …"). To include those, either grant
-> TaigaBot **View Channel** on each one, or **run `/setup` once with the bot
-> temporarily set to Administrator** — it can then reach every channel in a
-> single pass. Remove Administrator afterwards; the permissions above are enough
-> for day-to-day use.
-
-Then `/health` shows whether everything is wired up correctly.
+> ⚠️ Irreversible, and runs on every `/setup`. Use once, then leave it off.
 
 ---
 
 ## How members verify
 
 1. `/verify name:Jane Doe email:jdoe@rit.edu`
-2. TaigaBot emails a 6-digit code.
-3. `/confirm code:123456` → role swaps to **Verified**, server unlocks, and their
-   Discord username, real name, and email are saved to the database.
+2. TaigaBot emails a 6-digit code (the email names the server it was requested from).
+3. `/confirm code:123456` → role swaps to **Verified**, the server unlocks, and
+   their Discord username, real name, and email are saved.
 
-One email = one account (re-use is blocked). Eboard can `/whois @member` to see a
-member's stored info or `/unverify @member` to reset them.
+One RIT account = one membership: `jdoe@rit.edu` and `jdoe@g.rit.edu` are treated
+as the same person (matched on the part before the `@`). A member who verified on
+one server the bot is in is auto-granted `Verified` when joining another — no
+re-verification needed. Eboard can `/whois @member` or `/unverify @member`.
 
-> **Multi-guild note:** verification is the one feature with *global* settings —
-> the allowed email domains (`ALLOWED_EMAIL_DOMAINS`) and the sending Gmail account
-> come from `.env` and apply to **every** server the bot is in. It's built for a
-> single university club, so if you invite the bot elsewhere, those servers will
-> also gatekeep on your configured domains using your Gmail account. Everything
-> else (moderation, leveling, reaction roles, welcome) is fully per-server.
+> **Multi-guild note:** verification settings are *global* — the allowed email
+> domains and the sending Gmail come from `.env` and apply to every server the bot
+> is in. It's built for a single university club. Everything else is per-server.
+
+---
+
+## Projects
+
+A lightweight project directory with self-service joining.
+
+- **`/createproject`** (Eboard) — a form for name, description, tags, team-lead
+  Discord ID, and a reaction emoji. You pick (or create) a category, then the bot
+  creates a **project role**, a **channel** gated to that role, a formatted intro
+  message (description + lead), a reaction-role entry in `#roles`, and a DB record.
+- **`/projects [tag]`** — browse all projects, optionally filtered by tag.
+- **`/joinproject [tag]`** — anyone picks a project from a dropdown and requests to
+  join. The **team lead gets a DM** with Approve/Deny buttons (which survive
+  restarts). On approval the role is granted automatically; either way the
+  requester is DM'd the outcome.
+- **`/dropproject`** (Eboard) — select a project to delete its channel, role, and
+  reaction-role entry.
+
+**Recommended:** put your projects in one category and **exclude that category**
+from gating (see above) so project channels stay visible only to their role
+holders — i.e. a member must verify *and* hold the project role to see it.
+
+---
+
+## AI assistant (`/ask`)
+
+`/ask prompt:<question>` answers via Google's **Gemini** (free tier). Set
+`GEMINI_API_KEY` to enable it (blank = command reports it's not configured). Has a
+per-user cooldown; if the free quota runs out it replies **"Out of Gemini
+credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
 
 ---
 
 ## Customizing
 
-- **Tsundere lines** — edit [`personality.py`](personality.py). Lines are grouped
-  by situation (`mention`, `verify_success`, `automod`, …). Set `ENABLED = False`
+- **Tsundere lines** — [`personality.py`](personality.py); set `ENABLED = False`
   for a plain bot.
-- **Allowed email domains / role & channel names / OTP timeout** — all in `.env`.
-- **Banned words** — managed live via `/automod addword` (stored per-server).
-- **Resources & AI terms** — edit the `RESOURCES` and `AI_TERMS` lists in
+- **Email domains / role & channel names / OTP timeout / Gemini model** — `.env`.
+- **Banned words** — live via `/automod addword` (per-server).
+- **Resources & AI terms** — `RESOURCES` / `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
-- **XP tuning** — constants at the top of [`features/leveling.py`](features/leveling.py).
+- **XP tuning** — top of [`features/leveling.py`](features/leveling.py).
 
-### Adding a brand-new feature
-Create `features/myfeature.py`:
-```python
-from discord.ext import commands
-
-class MyFeature(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-    # ... commands / listeners ...
-
-async def setup(bot):
-    await bot.add_cog(MyFeature(bot))
-```
-Restart the bot — it's loaded automatically. Use `self.bot.db` for storage and
-`from utils.checks import is_eboard` to gate commands to Eboard.
+### Adding a feature
+Create `features/myfeature.py` with an async `setup(bot)` that adds a cog —
+it's auto-loaded on next start. Use `self.bot.db` for storage and
+`from utils.checks import is_eboard` to gate commands.
 
 ---
 
-## Data & privacy
+## Data, privacy & backups
 
-All data is stored locally in `taigabot.db` (SQLite): verified members'
-name/email/Discord ID, automod settings, XP, warnings, and reaction-role bindings.
-The DB and `.env` are git-ignored. Since you collect real names and emails, only
-give Eboard access to the server host and the `#mod-log` / `#taiga-backups`
-channels.
+Data lives in `taigabot.db` (SQLite): verified members' name/email/Discord ID,
+automod settings, XP, warnings, reaction-role bindings, and projects. The DB and
+`.env` are git-ignored. Since you store real names and emails, only give Eboard
+access to the host and the `#mod-log` / `#taiga-backups` channels.
 
-### Backups (recommended on free hosts)
+A crash, restart, or sleep never loses data (SQLite commits every write). The real
+risk is the host wiping its filesystem (e.g. a Replit rebuild). Backups guard
+against that and run automatically:
 
-A crash, restart, or sleep **never** loses data — SQLite commits every write to
-disk. The one real risk is the host rebuilding its container and wiping the file
-(e.g. a Replit rebuild or a Deployment). Backups guard against that, and they
-work automatically:
+- `/setup` creates a private, **Eboard-only** `#taiga-backups`.
+- Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads, **per server**, a
+  `.db` snapshot of *only that server's* data plus a **roster CSV** of its current
+  Verified/admin members. `/backup` does it on demand; `python backup_now.py`
+  triggers it from a shell (`GID=<id> python backup_now.py` for one server).
+- **Restore:** download the latest `.db` from `#taiga-backups` and put it at the
+  bot's `DB_PATH`.
 
-- `/setup` creates a private, **Eboard-only** channel called `#taiga-backups`
-  (name configurable via `BACKUP_CHANNEL_NAME`).
-- Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads two files to that
-  channel: a `.db` snapshot and a **roster CSV** of the guild's current members
-  who hold the Verified role or are admins (with their name/email where on
-  record). Eboard can also run `/backup` to snapshot on demand.
-- **Per-server:** each server's backup contains *only that server's* rows
-  (its verified members, XP, warnings, settings, reaction roles) — never any
-  other server's data. So one server's Eboard can never see another's
-  names/emails.
-- **Trigger from a shell:** run `python backup_now.py` (e.g. in the Replit
-  Shell) to upload a backup immediately without waiting for the timer;
-  `GID=<server id> python backup_now.py` limits it to one server.
-- **Restore:** download the latest `.db` attachment from `#taiga-backups`. It's
-  a standalone SQLite database of that server's data; merge/import it into the
-  bot's `DB_PATH` (or hand it to whoever maintains the bot).
-
-> ⚠️ A backup file still contains real names and emails for that server. Keep
-> `#taiga-backups` Eboard-only (the `/setup` lockdown does this), and don't move
-> it somewhere non-Eboard members can read. The file is plain SQLite
-> (unencrypted).
->
-> `BACKUP_CHANNEL_ID` is an optional override to send a guild's backups to a
-> specific channel by ID instead of the auto-created one.
+> ⚠️ A backup holds real names and emails — keep `#taiga-backups` Eboard-only.
+> The file is plain (unencrypted) SQLite. `BACKUP_CHANNEL_ID` optionally overrides
+> the destination by ID.
 
 ## Project layout
 ```
@@ -250,6 +226,7 @@ TaigaBot/
 ├─ database.py         # async SQLite layer (bot.db)
 ├─ personality.py      # ✏️ editable tsundere lines
 ├─ keep_alive.py       # tiny HTTP server for free hosts (Replit) uptime pings
+├─ backup_now.py       # one-shot backup trigger for a shell
 ├─ requirements.txt
 ├─ .env.example
 ├─ utils/              # checks.py, emailer.py, guildutils.py

@@ -68,7 +68,8 @@ class Help(commands.Cog):
         embed.add_field(
             name="📚 AI/ML",
             value=(
-                "`/paper query` — search arXiv for papers\n"
+                "`/ask prompt` — ask the AI assistant a question\n"
+                "`/paper query` — search for papers\n"
                 "`/resource` — curated learning resources\n"
                 "`/aiterm term` — learn an AI/ML term"
             ),

@@ -75,6 +75,12 @@ BACKUP_CHANNEL_ID: int | None = (
 )
 BACKUP_INTERVAL_HOURS: int = int(_get("BACKUP_INTERVAL_HOURS", "12"))
 
+# ── Gemini AI assistant (/ask) ───────────────────────────────────────────────
+# Free Gemini API key from https://aistudio.google.com/apikey . Leave blank to
+# disable /ask. GEMINI_MODEL can be any free-tier model name.
+GEMINI_API_KEY: str = _get("GEMINI_API_KEY")
+GEMINI_MODEL: str = _get("GEMINI_MODEL", "gemini-2.0-flash")
+
 # Bot branding
 BOT_COLOR = 0xE8552D  # warm orange, "Taiga"
 

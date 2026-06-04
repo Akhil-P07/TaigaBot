@@ -1,6 +1,6 @@
 """AI/ML engagement commands for the club.
 
-  /paper <query>  — search arXiv for recent papers
+  /paper <query>  — search for papers (via OpenAlex, a free keyless API)
   /resource [topic] — curated learning resources (edit RESOURCES below)
   /aiterm         — a random "AI term of the day" with a definition
 
@@ -12,7 +12,6 @@ import logging
 import random
 import socket
 import urllib.parse
-import xml.etree.ElementTree as ET
 
 import aiohttp
 import discord
@@ -23,9 +22,23 @@ import config
 
 log = logging.getLogger("taigabot.resources")
 
-ARXIV_API = "https://export.arxiv.org/api/query"
-# arXiv asks API clients to identify themselves.
-ARXIV_HEADERS = {"User-Agent": "TaigaBot/1.0 (RIT AI Club Discord bot)"}
+# OpenAlex is a free, keyless scholarly API that's reliable from cloud hosts
+# (unlike arXiv's export API, which silently stalls datacenter IPs like Replit).
+OPENALEX_API = "https://api.openalex.org/works"
+# Including a contact in `mailto` puts us in OpenAlex's faster "polite pool".
+OPENALEX_MAILTO = "aiclub@rit.edu"
+
+
+def _reconstruct_abstract(inverted_index: dict | None) -> str:
+    """OpenAlex returns abstracts as a word -> [positions] inverted index;
+    rebuild the plain text from it."""
+    if not inverted_index:
+        return ""
+    positions: dict[int, str] = {}
+    for word, idxs in inverted_index.items():
+        for i in idxs:
+            positions[i] = word
+    return " ".join(positions[i] for i in sorted(positions))
 
 # ✏️ Curated resources — add your own club favorites here.
 RESOURCES: dict[str, list[tuple[str, str]]] = {
@@ -70,53 +83,60 @@ class Resources(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="paper", description="Search arXiv for AI/ML papers.")
+    @app_commands.command(name="paper", description="Search for AI/ML papers.")
     @app_commands.describe(query="Search terms, e.g. 'diffusion models'")
     async def paper(self, interaction: discord.Interaction, query: str):
         await interaction.response.defer(thinking=True)
         params = {
-            "search_query": f"all:{query}",
-            "start": 0,
-            "max_results": 5,
-            "sortBy": "relevance",
-            "sortOrder": "descending",
+            "search": query,
+            "per-page": 5,
+            "mailto": OPENALEX_MAILTO,
         }
-        url = f"{ARXIV_API}?{urllib.parse.urlencode(params)}"
+        url = f"{OPENALEX_API}?{urllib.parse.urlencode(params)}"
         try:
-            # Force IPv4: many cloud hosts (e.g. Replit) hang trying arXiv's IPv6.
+            # Force IPv4 — cloud hosts (e.g. Replit) can hang on IPv6.
             connector = aiohttp.TCPConnector(family=socket.AF_INET)
-            async with aiohttp.ClientSession(
-                headers=ARXIV_HEADERS, connector=connector
-            ) as session:
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=20)
                 ) as resp:
                     resp.raise_for_status()
-                    text = await resp.text()
-            root = ET.fromstring(text)
+                    data = await resp.json()
         except Exception:  # noqa: BLE001
-            log.exception("arXiv request failed for query %r", query)
-            await interaction.followup.send("⚠️ Couldn't reach arXiv right now. Try again later.")
+            log.exception("paper search failed for query %r", query)
+            await interaction.followup.send(
+                "⚠️ Couldn't reach the paper search right now. Try again later."
+            )
             return
 
-        ns = {"a": "http://www.w3.org/2005/Atom"}
-        entries = root.findall("a:entry", ns)
-        if not entries:
+        results = data.get("results", [])
+        if not results:
             await interaction.followup.send(f"No papers found for **{query}**.")
             return
 
         embed = discord.Embed(
-            title=f"📄 arXiv results for “{query}”", color=config.BOT_COLOR
+            title=f"📄 Paper results for “{query}”", color=config.BOT_COLOR
         )
-        for e in entries:
-            title = " ".join(e.find("a:title", ns).text.split())
-            link = e.find("a:id", ns).text
-            authors = [a.find("a:name", ns).text for a in e.findall("a:author", ns)]
+        for w in results:
+            title = (w.get("title") or w.get("display_name") or "Untitled").strip()
+            authors = [
+                a["author"]["display_name"]
+                for a in w.get("authorships", [])
+                if a.get("author")
+            ]
             author_str = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
-            summary = " ".join(e.find("a:summary", ns).text.split())
+            year = w.get("publication_year")
+            meta = " · ".join(p for p in (author_str, str(year) if year else "") if p)
+            link = (
+                (w.get("primary_location") or {}).get("landing_page_url")
+                or w.get("doi")
+                or w.get("id")
+            )
+            summary = _reconstruct_abstract(w.get("abstract_inverted_index"))
+            summary = summary[:200] + "…" if summary else "*No abstract available.*"
             embed.add_field(
                 name=title[:240],
-                value=f"*{author_str}*\n{summary[:200]}…\n[Read it]({link})",
+                value=f"*{meta}*\n{summary}\n[Read it]({link})",
                 inline=False,
             )
         await interaction.followup.send(embed=embed)
