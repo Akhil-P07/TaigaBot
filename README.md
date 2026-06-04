@@ -50,10 +50,16 @@ py -m pip install -r requirements.txt
    **Bot** tab. (Discord requires app verification once you pass **100 servers** to
    keep the privileged intents above.)
 5. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`;
-   bot permissions: *Manage Roles, Manage Channels, Kick, Ban, Moderate Members,
-   Manage Messages, Read Messages/View Channels, Send Messages, Add Reactions,
-   Embed Links, Read Message History*. Open (or share) the generated URL to invite
-   the bot to any server.
+   bot permissions: *Manage Roles, Manage Channels, **View Channels**, **Use
+   Application Commands**, Kick, Ban, Moderate Members, Manage Messages, Send
+   Messages, Add Reactions, Embed Links, Read Message History*. Open (or share)
+   the generated URL to invite the bot to any server.
+
+   > **View Channels** and **Use Application Commands** are easy to miss but
+   > **required**: Discord only lets a bot edit a channel's `view_channel` /
+   > `use_application_commands` overwrites if the bot *holds* those permissions
+   > itself. Without them, `/setup` can't gate channels and you'll see
+   > "Missing Access" errors.
 
 ### 3. Gmail for OTP emails
 1. Use/create a Gmail account for the bot and enable **2-Step Verification**.
@@ -92,6 +98,17 @@ after adding channels) to re-apply the gating.
 > **Important:** In *Server Settings → Roles*, drag **TaigaBot's** role **above**
 > the `Unverified`/`Verified` roles (and any reaction-role roles), or it can't
 > manage them.
+
+`/setup` checks its own permissions first and tells you if any are missing, and
+it reports exactly which channels it gated or had to skip.
+
+> **Already-private channels:** a channel that already denies `@everyone` the
+> View Channel permission is invisible to the bot, so it can't gate it (you'll
+> see it listed under "Couldn't edit …"). To include those, either grant
+> TaigaBot **View Channel** on each one, or **run `/setup` once with the bot
+> temporarily set to Administrator** — it can then reach every channel in a
+> single pass. Remove Administrator afterwards; the permissions above are enough
+> for day-to-day use.
 
 Then `/health` shows whether everything is wired up correctly.
 

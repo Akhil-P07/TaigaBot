@@ -69,11 +69,16 @@ class Setup(commands.Cog):
 
         # 0. Bail early with a clear message if the bot lacks the permissions it
         #    needs — otherwise the first API call fails with a cryptic 403.
+        # Note: to edit a channel's view_channel/use_application_commands
+        # overwrites, the bot must HOLD those permissions itself (Discord blocks
+        # granting perms you don't have, unless you're an Administrator).
         perms = guild.me.guild_permissions
         missing = [
             label for label, ok in (
                 ("Manage Roles", perms.manage_roles),
                 ("Manage Channels", perms.manage_channels),
+                ("View Channels", perms.view_channel),
+                ("Use Application Commands", perms.use_application_commands),
             ) if not ok
         ]
         if missing:
@@ -140,7 +145,7 @@ class Setup(commands.Cog):
         #    categories and voice channels, not just text.
         core_ids = {unverified_ch.id, welcome_ch.id, modlog_ch.id}
         gated = 0
-        skipped = 0
+        skipped_names: list[str] = []
         for ch in guild.channels:
             if ch.id in core_ids:
                 continue
@@ -158,12 +163,15 @@ class Setup(commands.Cog):
             if ok:
                 gated += 1
             else:
-                skipped += 1
+                skipped_names.append(ch.name)
         msg = f"Gated {gated} channel(s) behind the **{config.VERIFIED_ROLE_NAME}** role."
-        if skipped:
+        if skipped_names:
+            shown = ", ".join(f"`{n}`" for n in skipped_names[:10])
+            extra = f" (+{len(skipped_names) - 10} more)" if len(skipped_names) > 10 else ""
             msg += (
-                f" ⚠️ Skipped {skipped} channel(s) I couldn't edit — check that my "
-                "role is high enough and that I can access them."
+                f"\n⚠️ Couldn't edit {len(skipped_names)} channel(s): {shown}{extra}. "
+                "These are private channels I can't access — grant TaigaBot **View "
+                "Channel** on them (or run /setup once with Administrator), then re-run."
             )
         steps.append(msg)
 
