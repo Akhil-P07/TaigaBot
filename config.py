@@ -20,11 +20,15 @@ DISCORD_TOKEN: str = _get("DISCORD_TOKEN")
 GUILD_ID: int | None = int(_get("GUILD_ID")) if _get("GUILD_ID").isdigit() else None
 
 # ── Email / OTP ────────────────────────────────────────────────────────────
+# OTP emails are sent via Brevo's HTTP API (port 443), because hosts like
+# Railway/Render block outbound SMTP. Free account → verify a sender address
+# (no domain needed) → create an API key. https://app.brevo.com
+BREVO_API_KEY: str = _get("BREVO_API_KEY")
+# The "From" address; must be a Brevo-verified sender. Falls back to GMAIL_ADDRESS
+# so older configs keep working without renaming the variable.
 GMAIL_ADDRESS: str = _get("GMAIL_ADDRESS")
-# Google displays app passwords in 4 space-separated groups ("abcd efgh ..."),
-# but the spaces are only for readability — strip them so a copy-paste with
-# spaces still authenticates.
-GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD").replace(" ", "")
+EMAIL_FROM: str = _get("EMAIL_FROM") or GMAIL_ADDRESS
+EMAIL_FROM_NAME: str = _get("EMAIL_FROM_NAME", "TaigaBot")
 ALLOWED_EMAIL_DOMAINS: list[str] = [
     d.strip().lower() for d in _get("ALLOWED_EMAIL_DOMAINS", "rit.edu,g.rit.edu").split(",") if d.strip()
 ]
@@ -90,8 +94,10 @@ def validate() -> list[str]:
     problems = []
     if not DISCORD_TOKEN:
         problems.append("DISCORD_TOKEN is not set.")
-    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+    if not BREVO_API_KEY:
+        problems.append("BREVO_API_KEY not set — email verification will fail.")
+    if not EMAIL_FROM:
         problems.append(
-            "GMAIL_ADDRESS / GMAIL_APP_PASSWORD not set — email verification will fail."
+            "EMAIL_FROM (or GMAIL_ADDRESS) not set — no verified sender address for email."
         )
     return problems

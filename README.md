@@ -64,17 +64,22 @@ py -m pip install -r requirements.txt
    > `use_application_commands` overwrites if the bot *holds* those permissions.
    > Without them, `/setup` can't gate channels ("Missing Access").
 
-### 3. Gmail for OTP emails
-Create/choose a Gmail for the bot, enable **2-Step Verification**, make an **App
-Password** at <https://myaccount.google.com/apppasswords>, and put the address +
-16-char password in `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD`. (Don't use your RIT
-account — Workspace accounts usually block app passwords.)
+### 3. Brevo for OTP emails
+OTP codes are sent via **Brevo's HTTP API** (port 443) rather than SMTP, since
+hosts like **Railway/Render block outbound SMTP**. Create a free
+[Brevo](https://app.brevo.com) account, then:
+1. **Senders & IPs** → add and verify your sender email (click the link in the
+   confirmation email — **no domain required**).
+2. **SMTP & API → API Keys** → create a key.
+
+Put the key in `BREVO_API_KEY` and the verified address in `EMAIL_FROM`. (Brevo's
+free tier is 300 emails/day.)
 
 ### 4. Configure
 ```powershell
 copy .env.example .env
 ```
-Edit `.env` (token, Gmail). Everything else has sensible defaults. Optional:
+Edit `.env` (token, Brevo). Everything else has sensible defaults. Optional:
 `GEMINI_API_KEY` to enable `/ask` (free key at
 <https://aistudio.google.com/apikey>). `GUILD_ID` gives one server instant command
 updates while developing; leave blank in production.
@@ -143,8 +148,8 @@ one server the bot is in is auto-granted `Verified` when joining another — no
 re-verification needed. Eboard can `/whois @member` or `/unverify @member`.
 
 > **Multi-guild note:** verification settings are *global* — the allowed email
-> domains and the sending Gmail come from `.env` and apply to every server the bot
-> is in. It's built for a single university club. Everything else is per-server.
+> domains and the sending address come from `.env` and apply to every server the
+> bot is in. It's built for a single university club. Everything else is per-server.
 
 ---
 

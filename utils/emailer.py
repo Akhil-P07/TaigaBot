@@ -1,70 +1,35 @@
-"""Sends verification OTP emails over Gmail SMTP.
+"""Sends verification OTP emails via Brevo's HTTP API.
 
-Uses a Google "App Password" (not the account password). smtplib is blocking,
-so callers should run `send_otp_email` in a thread (see verification feature,
-which uses `asyncio.to_thread`).
+We POST to Brevo (https://api.brevo.com) over HTTPS:443 instead of using SMTP,
+because many hosts (Railway/Render/Fly containers, …) block outbound SMTP ports
+(25/465/587) — there it fails with "Network is unreachable" or a timeout. Port
+443 is never blocked, so this works anywhere.
 
-Connections are forced over IPv4. Many hosts (Render/Railway/Fly containers,
-etc.) have no working IPv6 route, so letting Python pick the AAAA record for
-smtp.gmail.com fails immediately with "[Errno 101] Network is unreachable". We
-also fall back from SMTPS:465 to STARTTLS:587 in case one port is throttled.
+Setup: create a free Brevo account, verify your sender address (Senders & IPs →
+no domain required), and create an API key (SMTP & API → API Keys). Put the key
+in BREVO_API_KEY and the verified address in EMAIL_FROM.
+
+urllib is blocking, so callers should run `send_otp_email` in a thread (the
+verification feature uses `asyncio.to_thread`).
 """
 from __future__ import annotations
 
-import smtplib
-import socket
-import ssl
-from email.message import EmailMessage
+import json
+import urllib.error
+import urllib.request
 
 import config
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_TIMEOUT = 20  # seconds — don't hang the verify flow if the host is firewalled
+BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
+HTTP_TIMEOUT = 20  # seconds — don't hang the verify flow
 
 
 class EmailError(Exception):
     """Raised when the OTP email could not be sent."""
 
 
-class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
-    """SMTP_SSL that connects over IPv4 only (dodges ENETUNREACH on hosts with no
-    IPv6 route), while still verifying TLS against the real hostname."""
-
-    def _get_socket(self, host, port, timeout):
-        addr = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4]
-        sock = socket.create_connection(addr, timeout, self.source_address)
-        return self.context.wrap_socket(sock, server_hostname=self._host)
-
-
-class _IPv4SMTP(smtplib.SMTP):
-    """Plain SMTP (for STARTTLS) that connects over IPv4 only."""
-
-    def _get_socket(self, host, port, timeout):
-        addr = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4]
-        return socket.create_connection(addr, timeout, self.source_address)
-
-
-def send_otp_email(
-    to_address: str, code: str, discord_name: str, guild_name: str = "TaigaBot"
-) -> None:
-    if not config.GMAIL_ADDRESS or not config.GMAIL_APP_PASSWORD:
-        raise EmailError("Email is not configured (GMAIL_ADDRESS / GMAIL_APP_PASSWORD).")
-
-    msg = EmailMessage()
-    msg["Subject"] = f"Your {guild_name} verification code: {code}"
-    msg["From"] = f"TaigaBot <{config.GMAIL_ADDRESS}>"
-    msg["To"] = to_address
-
-    msg.set_content(
-        f"Hi {discord_name},\n\n"
-        f"Your verification code for **{guild_name}** on Discord is: {code}\n\n"
-        f"Enter it in Discord with:  /confirm code:{code}\n\n"
-        f"This code expires in {config.OTP_TTL_MINUTES} minutes. "
-        f"If you didn't request this, you can ignore this email.\n\n"
-        f"— TaigaBot"
-    )
-    msg.add_alternative(
-        f"""
+def _html_body(code: str, discord_name: str, guild_name: str) -> str:
+    return f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto;">
           <h2 style="color:#E8552D;">{guild_name} — Verification</h2>
           <p>Hi {discord_name},</p>
@@ -78,43 +43,62 @@ def send_otp_email(
              If you didn't request this, ignore this email.</p>
           <p style="color:#888;">— TaigaBot 🐯</p>
         </div>
-        """,
-        subtype="html",
+    """
+
+
+def send_otp_email(
+    to_address: str, code: str, discord_name: str, guild_name: str = "TaigaBot"
+) -> None:
+    if not config.BREVO_API_KEY:
+        raise EmailError("Email is not configured (BREVO_API_KEY).")
+    if not config.EMAIL_FROM:
+        raise EmailError("Email sender is not configured (EMAIL_FROM / GMAIL_ADDRESS).")
+
+    text_body = (
+        f"Hi {discord_name},\n\n"
+        f"Your verification code for {guild_name} on Discord is: {code}\n\n"
+        f"Enter it in Discord with:  /confirm code:{code}\n\n"
+        f"This code expires in {config.OTP_TTL_MINUTES} minutes. "
+        f"If you didn't request this, you can ignore this email.\n\n"
+        f"— TaigaBot"
     )
 
-    context = ssl.create_default_context()
+    payload = {
+        "sender": {"name": config.EMAIL_FROM_NAME, "email": config.EMAIL_FROM},
+        "to": [{"email": to_address}],
+        "subject": f"Your {guild_name} verification code: {code}",
+        "textContent": text_body,
+        "htmlContent": _html_body(code, discord_name, guild_name),
+    }
 
-    def _login_and_send(server: smtplib.SMTP) -> None:
-        server.login(config.GMAIL_ADDRESS, config.GMAIL_APP_PASSWORD)
-        server.send_message(msg)
-
-    auth_msg = (
-        "Gmail rejected the login. Check GMAIL_ADDRESS and that "
-        "GMAIL_APP_PASSWORD is a valid App Password."
+    req = urllib.request.Request(
+        BREVO_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "api-key": config.BREVO_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
     )
 
-    # Primary: implicit TLS on 465. Bad credentials fail the same way on any
-    # port, so surface that immediately instead of retrying.
     try:
-        with _IPv4SMTP_SSL(SMTP_HOST, 465, context=context, timeout=SMTP_TIMEOUT) as server:
-            _login_and_send(server)
-        return
-    except smtplib.SMTPAuthenticationError as e:
-        raise EmailError(auth_msg) from e
-    except (OSError, smtplib.SMTPException) as primary_err:
-        pass  # likely a network/port issue — try STARTTLS on 587 below
-
-    # Fallback: STARTTLS on 587.
-    try:
-        with _IPv4SMTP(SMTP_HOST, 587, timeout=SMTP_TIMEOUT) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.ehlo()
-            _login_and_send(server)
-    except smtplib.SMTPAuthenticationError as e:
-        raise EmailError(auth_msg) from e
-    except (OSError, smtplib.SMTPException) as e:
-        raise EmailError(
-            f"Couldn't reach Gmail SMTP on ports 465 or 587 ({e}). If this host "
-            "blocks outbound SMTP, switch to an HTTP email API (e.g. SendGrid/Resend)."
-        ) from e
+        # 201 Created on success; nothing useful in the body for us.
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT):
+            return
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:300]
+        if e.code in (401, 403):
+            raise EmailError(
+                "Brevo rejected the API key — check BREVO_API_KEY."
+            ) from e
+        if e.code == 400 and "sender" in body.lower():
+            raise EmailError(
+                f"Brevo won't send from '{config.EMAIL_FROM}'. Verify that address "
+                "in Brevo (Senders & IPs) and set EMAIL_FROM to it."
+            ) from e
+        raise EmailError(f"Brevo error {e.code}: {body}") from e
+    except urllib.error.URLError as e:
+        raise EmailError(f"Couldn't reach Brevo ({e.reason}).") from e
+    except Exception as e:  # noqa: BLE001 - surface any failure to the caller
+        raise EmailError(f"Could not send email: {e}") from e
