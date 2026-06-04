@@ -68,6 +68,25 @@ class Verification(commands.Cog):
     def _expired(self, p: PendingVerification) -> bool:
         return (time.time() - p.created_at) > config.OTP_TTL_MINUTES * 60
 
+    def _live_pending_by_others(
+        self, student_id: str, exclude_id: int
+    ) -> PendingVerification | None:
+        """Return another user's still-active pending verification for this RIT
+        student ID, or None. Prunes any expired pendings it scans past.
+
+        This is how an "abandoned" request frees up: there's no event when a user
+        walks away, so we rely on the TTL — once expired, the entry is pruned here
+        and no longer blocks anyone. So a given email is reserved for at most
+        OTP_TTL_MINUTES. (Confirmed/failed requests are already deleted elsewhere.)
+        """
+        for uid, p in list(self.pending.items()):
+            if self._expired(p):
+                del self.pending[uid]
+                continue
+            if uid != exclude_id and _student_id(p.email) == student_id:
+                return p
+        return None
+
     @app_commands.command(
         name="verify", description="Verify with your RIT email to unlock the server."
     )
@@ -110,6 +129,21 @@ class Verification(commands.Cog):
             await interaction.response.send_message(
                 "❌ That RIT account is already linked to another verified member. "
                 "If this is a mistake, contact an Eboard member.",
+                ephemeral=True,
+            )
+            return
+
+        # Someone else already mid-verification for this same RIT account? Block
+        # the duplicate so we don't email a second code to the same inbox. Expired
+        # / abandoned pendings are pruned in the scan, so this frees up after the TTL.
+        conflict = self._live_pending_by_others(_student_id(email), member.id)
+        if conflict is not None:
+            secs_left = config.OTP_TTL_MINUTES * 60 - (time.time() - conflict.created_at)
+            mins_left = max(1, int(secs_left // 60) + 1)
+            await interaction.response.send_message(
+                "❌ Someone is already verifying that RIT account right now. "
+                f"If that's you on another device, finish with `/confirm` — otherwise "
+                f"try again in about {mins_left} minute(s).",
                 ephemeral=True,
             )
             return
