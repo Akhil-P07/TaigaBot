@@ -205,8 +205,15 @@ class Moderation(commands.Cog):
     async def kick(
         self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason given"
     ):
+        # DM before kicking — afterwards we can't reach them.
+        dmed = await self._dm_action(
+            member, interaction.guild.name, "Kicked", reason, discord.Color.orange()
+        )
         await member.kick(reason=f"{interaction.user}: {reason}")
-        await interaction.response.send_message(f"👢 Kicked {member} — {reason}", ephemeral=True)
+        note = "" if dmed else "\n*(couldn't DM them — DMs may be off.)*"
+        await interaction.response.send_message(
+            f"👢 Kicked {member} — {reason}{note}", ephemeral=True
+        )
         await self._log("Kick", interaction, member, reason)
 
     @app_commands.command(name="ban", description="(Eboard) Ban a member.")
@@ -215,8 +222,15 @@ class Moderation(commands.Cog):
     async def ban(
         self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason given"
     ):
+        # DM before banning — afterwards we can't reach them.
+        dmed = await self._dm_action(
+            member, interaction.guild.name, "Banned", reason, discord.Color.red()
+        )
         await member.ban(reason=f"{interaction.user}: {reason}", delete_message_days=1)
-        await interaction.response.send_message(f"🔨 Banned {member} — {reason}", ephemeral=True)
+        note = "" if dmed else "\n*(couldn't DM them — DMs may be off.)*"
+        await interaction.response.send_message(
+            f"🔨 Banned {member} — {reason}{note}", ephemeral=True
+        )
         await self._log("Ban", interaction, member, reason)
 
     @app_commands.command(name="timeout", description="(Eboard) Timeout a member for N minutes.")
@@ -296,6 +310,26 @@ class Moderation(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"🧹 Deleted {len(deleted)} message(s).", ephemeral=True)
+
+    @staticmethod
+    async def _dm_action(
+        member: discord.Member, guild_name: str, action_label: str,
+        reason: str, color: discord.Color,
+    ) -> bool:
+        """Best-effort DM telling a member they were kicked/banned, with the
+        reason. MUST be called BEFORE the kick/ban — afterwards the bot can no
+        longer reach them. Returns False if their DMs are closed."""
+        embed = discord.Embed(
+            title=f"{action_label} from {guild_name}",
+            description=f"You have been **{action_label.lower()}** from **{guild_name}**.",
+            color=color,
+        )
+        embed.add_field(name="Reason", value=reason or "No reason given", inline=False)
+        try:
+            await member.send(embed=embed)
+            return True
+        except discord.HTTPException:
+            return False
 
     async def _log(
         self, action: str, interaction: discord.Interaction, member: discord.Member, reason: str
