@@ -490,59 +490,78 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         tags = _norm_tags(self.tags.value or "")
         ch_name = _channel_name(name)
 
-        # Category.
-        if category_value == NEW_CATEGORY_SENTINEL:
-            existing = discord.utils.find(
-                lambda c: c.name.lower() == "projects", guild.categories
+        # Create the role, category, and channel. These need Manage Roles /
+        # Manage Channels; if we lack them (or our role sits too low) Discord
+        # raises Forbidden — surface that instead of leaving the modal stuck on
+        # "⚙️ Creating project…".
+        try:
+            # Category.
+            if category_value == NEW_CATEGORY_SENTINEL:
+                existing = discord.utils.find(
+                    lambda c: c.name.lower() == "projects", guild.categories
+                )
+                category = existing or await guild.create_category(
+                    "Projects", reason=f"TaigaBot: project {name}"
+                )
+            else:
+                category = guild.get_channel(int(category_value))  # None if deleted
+
+            # Role (reuse one with the same name if it exists).
+            role = discord.utils.find(lambda r: r.name.lower() == name.lower(), guild.roles)
+            if role is None:
+                role = await guild.create_role(
+                    name=name,
+                    color=discord.Color(config.BOT_COLOR),
+                    reason=f"TaigaBot: project role for {name}",
+                )
+
+            # Give every team lead the project role right away.
+            for lead in leads:
+                try:
+                    if role not in lead.roles:
+                        await lead.add_roles(role, reason=f"Team lead of {name}")
+                except discord.Forbidden:
+                    pass
+
+            # Channel.
+            eboard_role = gu.eboard_role(guild)
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                role: discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                ),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            }
+            if eboard_role:
+                overwrites[eboard_role] = discord.PermissionOverwrite(view_channel=True)
+
+            channel = discord.utils.find(
+                lambda c: c.name == ch_name and isinstance(c, discord.TextChannel),
+                guild.channels,
             )
-            category = existing or await guild.create_category(
-                "Projects", reason=f"TaigaBot: project {name}"
+            if channel is None:
+                channel = await guild.create_text_channel(
+                    ch_name,
+                    category=category,
+                    overwrites=overwrites,
+                    reason=f"TaigaBot: project channel for {name}",
+                )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "⛔ I couldn't create the project's role/channel. I need **Manage Roles** "
+                "and **Manage Channels**, and my **TaigaBot** role must sit near the top "
+                "in **Server Settings → Roles**. Fix that and run `/createproject` again.",
+                ephemeral=True,
             )
-        else:
-            category = guild.get_channel(int(category_value))
-
-        # Role.
-        role = discord.utils.find(lambda r: r.name.lower() == name.lower(), guild.roles)
-        if role is None:
-            role = await guild.create_role(
-                name=name,
-                color=discord.Color(config.BOT_COLOR),
-                reason=f"TaigaBot: project role for {name}",
+            return
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"⚠️ Discord rejected the project setup ({e}). Try again.",
+                ephemeral=True,
             )
+            return
 
-        # Give every team lead the project role right away.
-        for lead in leads:
-            try:
-                if role not in lead.roles:
-                    await lead.add_roles(role, reason=f"Team lead of {name}")
-            except discord.Forbidden:
-                pass
-
-        # Channel.
-        eboard_role = gu.eboard_role(guild)
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            role: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True
-            ),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        }
-        if eboard_role:
-            overwrites[eboard_role] = discord.PermissionOverwrite(view_channel=True)
-
-        channel = discord.utils.find(
-            lambda c: c.name == ch_name and isinstance(c, discord.TextChannel),
-            guild.channels,
-        )
-        if channel is None:
-            channel = await guild.create_text_channel(
-                ch_name,
-                category=category,
-                overwrites=overwrites,
-                reason=f"TaigaBot: project channel for {name}",
-            )
-
-        # Intro embed.
+        # Intro embed (best-effort — the channel already exists either way).
         embed = discord.Embed(
             title=f"📌 {name}",
             description=desc,
@@ -557,7 +576,10 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         if tags:
             embed.add_field(name="Tags", value=_fmt_tags(tags), inline=False)
         embed.set_footer(text="Use /joinproject to request to join this project.")
-        await channel.send(embed=embed)
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException:
+            pass
 
         # Persist to the DB. Joining is via /joinproject (lead approval), so we
         # deliberately do NOT auto-create a self-assign reaction role.
@@ -569,7 +591,7 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
             f"✅ **{name}** is ready!\n"
             f"• Channel: {channel.mention}\n"
             f"• Role: {role.mention} (given to {leads_str})\n"
-            f"• Category: **{category.name}**\n"
+            f"• Category: **{category.name if category else 'none'}**\n"
             f"• Tags: {_fmt_tags(tags) or 'none'}\n"
             f"Members join via `/joinproject` — leads approve requests by DM.",
             ephemeral=True,
