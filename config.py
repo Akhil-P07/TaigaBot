@@ -21,7 +21,10 @@ GUILD_ID: int | None = int(_get("GUILD_ID")) if _get("GUILD_ID").isdigit() else 
 
 # ── Email / OTP ────────────────────────────────────────────────────────────
 GMAIL_ADDRESS: str = _get("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD")
+# Google displays app passwords in 4 space-separated groups ("abcd efgh ..."),
+# but the spaces are only for readability — strip them so a copy-paste with
+# spaces still authenticates.
+GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD").replace(" ", "")
 ALLOWED_EMAIL_DOMAINS: list[str] = [
     d.strip().lower() for d in _get("ALLOWED_EMAIL_DOMAINS", "rit.edu,g.rit.edu").split(",") if d.strip()
 ]
@@ -38,6 +41,14 @@ MODLOG_CHANNEL_NAME: str = _get("MODLOG_CHANNEL_NAME", "mod-log")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH: str = _get("DB_PATH", "taigabot.db")
+
+# ── Backups ──────────────────────────────────────────────────────────────────
+# Channel ID the bot uploads database snapshots to. MUST be a private,
+# Eboard-only channel — the DB contains real names and emails. Blank = disabled.
+BACKUP_CHANNEL_ID: int | None = (
+    int(_get("BACKUP_CHANNEL_ID")) if _get("BACKUP_CHANNEL_ID").isdigit() else None
+)
+BACKUP_INTERVAL_HOURS: int = int(_get("BACKUP_INTERVAL_HOURS", "12"))
 
 # Bot branding
 BOT_COLOR = 0xE8552D  # warm orange, "Taiga"

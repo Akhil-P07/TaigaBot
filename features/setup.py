@@ -87,20 +87,30 @@ class Setup(commands.Cog):
             f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, {modlog_ch.mention}"
         )
 
-        # 3. Lock every OTHER channel so Unverified members can't talk there.
+        # 3. Hide every OTHER channel/category from Unverified members so they
+        #    can only SEE (and talk in) #unverified. #welcome stays visible but
+        #    read-only so new members still see the greeting. Covers categories
+        #    and voice channels too, not just text.
         locked = 0
-        for ch in guild.text_channels:
+        for ch in guild.channels:
             if ch.id == unverified_ch.id:
                 continue
             try:
-                await ch.set_permissions(
-                    unverified, send_messages=False, add_reactions=False,
-                    reason="TaigaBot: restrict unverified members",
-                )
+                if ch.id == welcome_ch.id:
+                    await ch.set_permissions(
+                        unverified, view_channel=True, send_messages=False,
+                        add_reactions=False,
+                        reason="TaigaBot: welcome is read-only for unverified",
+                    )
+                else:
+                    await ch.set_permissions(
+                        unverified, view_channel=False,
+                        reason="TaigaBot: hide channels from unverified members",
+                    )
                 locked += 1
             except discord.Forbidden:
                 pass
-        steps.append(f"Restricted Unverified from talking in {locked} other channel(s).")
+        steps.append(f"Hid/locked {locked} other channel(s) from Unverified members.")
 
         # 4. Assign Unverified to all existing members who aren't verified.
         assigned = 0

@@ -27,6 +27,7 @@ name within each guild. One exception — see the verification note below.
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
+| **Backups** | `features/backup.py` | `/backup` (Eboard) |
 
 All moderation/admin commands check the caller's **Eboard** role (server admins
 always pass).
@@ -143,6 +144,20 @@ All data is stored locally in `taigabot.db` (SQLite): verified members'
 name/email/Discord ID, automod settings, XP, warnings, and reaction-role bindings.
 The DB and `.env` are git-ignored. Since you collect real names and emails, only
 give Eboard access to the server host and the `#mod-log` channel.
+
+### Backups (recommended on free hosts)
+
+A crash, restart, or sleep **never** loses data — SQLite commits every write to
+disk. The one real risk is the host rebuilding its container and wiping the file
+(e.g. a Replit rebuild or a Deployment). To guard against that, set
+`BACKUP_CHANNEL_ID` to a **private, Eboard-only** channel: the bot uploads a
+consistent snapshot of the DB there every `BACKUP_INTERVAL_HOURS` (default 12),
+and Eboard can run `/backup` to snapshot on demand. To restore, download the
+latest `taigabot.db` attachment and put it at the bot's `DB_PATH`.
+
+> ⚠️ The snapshot is the full database, including real names and emails. Never
+> point `BACKUP_CHANNEL_ID` at a channel non-Eboard members can read. The file
+> is plain SQLite (unencrypted).
 
 ## Project layout
 ```
