@@ -28,9 +28,11 @@ name within each guild. One exception — see the verification note below.
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
 | **Backups** | `features/backup.py` | `/backup` (Eboard) |
+| **Help** | `features/help.py` | `/help` |
 
 All moderation/admin commands check the caller's **Eboard** role (server admins
-always pass).
+always pass). `/help` is open to everyone but shows the full Eboard reference
+only to Eboard/admins, and the member command list to everyone else.
 
 ---
 
