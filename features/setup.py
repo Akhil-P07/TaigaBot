@@ -46,8 +46,22 @@ class _SetupView(discord.ui.View):
         self.add_item(self.select)
         self.confirmed = False
         self.excluded_ids: set[int] = set()
+        self.reset_roles = False  # toggled by the button below
 
-    @discord.ui.button(label="Run setup", style=discord.ButtonStyle.green, row=1)
+    def _reset_label(self) -> str:
+        return "⚠️ Role reset: ON  (click to disable)" if self.reset_roles else "Role reset: off  (click to enable)"
+
+    @discord.ui.button(label="Role reset: off  (click to enable)", style=discord.ButtonStyle.grey, row=1)
+    async def toggle_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.reset_roles = not self.reset_roles
+        button.label = self._reset_label()
+        button.style = discord.ButtonStyle.danger if self.reset_roles else discord.ButtonStyle.grey
+        await interaction.response.edit_message(
+            content=self._build_content(),
+            view=self,
+        )
+
+    @discord.ui.button(label="Run setup", style=discord.ButtonStyle.green, row=2)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.excluded_ids = {int(v) for v in self.select.values}
         self.confirmed = True
@@ -58,13 +72,27 @@ class _SetupView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, row=1)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, row=2)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.confirmed = False
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=self)
         self.stop()
+
+    @staticmethod
+    def _build_content() -> str:
+        return (
+            "**TaigaBot Setup**\n\n"
+            "**1️⃣ Exclude from gating** *(optional)*\n"
+            "Select categories/channels to leave untouched (e.g. a Projects "
+            "category gated by interest roles). Leave blank to gate everything.\n\n"
+            "**2️⃣ Role reset** *(destructive — off by default)*\n"
+            "Strips every member's non-essential roles so old interest/self-assign "
+            "roles no longer grant access. Members re-pick in `#roles` after "
+            "verifying. Toggle the button below only if you need a clean slate.\n\n"
+            "Then click **Run setup**."
+        )
 
 
 class Setup(commands.Cog):
@@ -171,11 +199,13 @@ class Setup(commands.Cog):
             for opt in view.select.options:
                 if opt.value in pre:
                     opt.default = True
+            # Reflect env default for role reset.
+            if config.RESET_ROLES_ON_SETUP:
+                view.reset_roles = True
+                view.toggle_reset.label = view._reset_label()
+                view.toggle_reset.style = discord.ButtonStyle.danger
             await interaction.response.send_message(
-                "**TaigaBot Setup**\n"
-                "Select any **categories or channels** you want to exclude from "
-                "verification gating (e.g. a Projects category gated by interest roles). "
-                "Leave blank to gate everything. Then click **Run setup**.",
+                _SetupView._build_content(),
                 view=view,
                 ephemeral=True,
             )
@@ -184,10 +214,12 @@ class Setup(commands.Cog):
                 return
             # Merge env-configured IDs with the user's interactive selection.
             ignore_ids = config.GATING_IGNORE_IDS | view.excluded_ids
+            do_reset_roles = view.reset_roles
         else:
             # No categories/channels yet — skip the picker.
             await interaction.response.defer(ephemeral=True, thinking=True)
             ignore_ids = config.GATING_IGNORE_IDS
+            do_reset_roles = config.RESET_ROLES_ON_SETUP
 
         # 0. Bail early with a clear message if the bot lacks the permissions it
         #    needs — otherwise the first API call fails with a cryptic 403.
@@ -231,8 +263,9 @@ class Setup(commands.Cog):
 
         # 1.5 OPTIONAL, DESTRUCTIVE: wipe everyone's roles (except the functional
         #     ones) so old interest/self-assign roles no longer grant access until
-        #     members re-verify and re-pick in #roles. Opt in via RESET_ROLES_ON_SETUP.
-        if config.RESET_ROLES_ON_SETUP:
+        #     members re-verify and re-pick in #roles. Toggled interactively or
+        #     via RESET_ROLES_ON_SETUP env flag.
+        if do_reset_roles:
             keep = {unverified, verified, eboard}
             stripped = await self._strip_roles(guild, keep)
             steps.append(
