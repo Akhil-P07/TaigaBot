@@ -90,7 +90,9 @@ def send_otp_email(
         body = e.read().decode("utf-8", "replace")[:300]
         if e.code in (401, 403):
             raise EmailError(
-                "Brevo rejected the API key — check BREVO_API_KEY."
+                f"Brevo rejected the request ({e.code}): {body}. Check BREVO_API_KEY "
+                "is a v3 API key (starts with 'xkeysib-'), not the SMTP key, and that "
+                "your Brevo account is activated."
             ) from e
         if e.code == 400 and "sender" in body.lower():
             raise EmailError(

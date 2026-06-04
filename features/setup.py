@@ -439,7 +439,7 @@ class Setup(commands.Cog):
             status(gu.get_channel(guild, config.UNVERIFIED_CHANNEL_NAME), "#unverified channel"),
             status(gu.welcome_channel(guild), "#welcome channel"),
             status(gu.modlog_channel(guild), "#mod-log channel"),
-            status(config.GMAIL_ADDRESS and config.GMAIL_APP_PASSWORD, "Email (OTP) configured"),
+            status(config.BREVO_API_KEY and config.EMAIL_FROM, "Email (OTP) configured"),
         ]
         embed = discord.Embed(
             title="🐯 TaigaBot health",
