@@ -317,6 +317,15 @@ class Setup(commands.Cog):
             roles_ch, verified, view_channel=True, send_messages=False,
             add_reactions=True, read_message_history=True, reason="TaigaBot setup",
         )
+        # Grant TaigaBot itself access to the channels it posts in — otherwise the
+        # @everyone view/send deny above also locks the bot out (it's just an
+        # @everyone member for permissions), breaking welcome/mod-log/backups/roles.
+        for ch in (unverified_ch, welcome_ch, modlog_ch, backups_ch, roles_ch):
+            await self._set_perms(
+                ch, guild.me, view_channel=True, send_messages=True,
+                embed_links=True, attach_files=True, add_reactions=True,
+                read_message_history=True, reason="TaigaBot: bot access to its channels",
+            )
         steps.append(
             f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, "
             f"{modlog_ch.mention}, {backups_ch.mention}, {roles_ch.mention}"

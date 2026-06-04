@@ -431,7 +431,13 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
             embed.set_footer(text=f"React with {emoji_str} in #roles to join this project.")
         await channel.send(embed=embed)
 
-        # Reaction role in #roles.
+        # Persist to DB FIRST so the project is recorded even if the #roles wiring
+        # below fails (e.g. the bot can't post in #roles).
+        await self.bot.db.add_project(
+            channel.id, guild.id, name, role.id, lead.id, desc, tags
+        )
+
+        # Reaction role in #roles — best-effort; never let it abort creation.
         roles_ch = gu.get_channel(guild, config.ROLES_CHANNEL_NAME)
         rr_note = ""
         if not emoji_str:
@@ -439,40 +445,40 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
                 "⚠️ No emoji chosen (timed out) — add the reaction role later with "
                 f"`/reactionrole add … role:{role.mention}`."
             )
-        elif roles_ch:
-            rows = await self.bot.db.list_reaction_roles(guild.id)
-            rr_msg = None
-            if rows:
-                try:
-                    rr_msg = await roles_ch.fetch_message(rows[-1]["message_id"])
-                except discord.NotFound:
-                    rr_msg = None
-            if rr_msg is None:
-                rr_embed = discord.Embed(
-                    title="🎟️ Pick your projects",
-                    description="React below to join a project channel.",
-                    color=discord.Color(config.BOT_COLOR),
-                )
-                rr_embed.set_footer(text="React to get a role • un-react to remove it")
-                rr_msg = await roles_ch.send(embed=rr_embed)
+        elif not roles_ch:
+            rr_note = f"⚠️ No `#{config.ROLES_CHANNEL_NAME}` — run `/setup` first."
+        else:
             try:
+                rows = await self.bot.db.list_reaction_roles(guild.id)
+                rr_msg = None
+                if rows:
+                    try:
+                        rr_msg = await roles_ch.fetch_message(rows[-1]["message_id"])
+                    except discord.NotFound:
+                        rr_msg = None
+                if rr_msg is None:
+                    rr_embed = discord.Embed(
+                        title="🎟️ Pick your projects",
+                        description="React below to join a project channel.",
+                        color=discord.Color(config.BOT_COLOR),
+                    )
+                    rr_embed.set_footer(text="React to get a role • un-react to remove it")
+                    rr_msg = await roles_ch.send(embed=rr_embed)
                 await rr_msg.add_reaction(emoji_str)
                 partial = discord.PartialEmoji.from_str(emoji_str)
                 emoji_key = str(partial.id) if partial.id else (partial.name or emoji_str)
                 await self.bot.db.add_reaction_role(guild.id, rr_msg.id, emoji_key, role.id)
                 rr_note = f"Added {emoji_str} → {role.mention} in {roles_ch.mention}."
+            except discord.Forbidden:
+                rr_note = (
+                    f"⚠️ I can't post in {roles_ch.mention} — re-run `/setup` so I get "
+                    "access there, then add the reaction role manually."
+                )
             except discord.HTTPException:
                 rr_note = (
-                    f"⚠️ Couldn't add emoji — add manually: "
-                    f"`/reactionrole add message_id:{rr_msg.id} emoji:{emoji_str} role:{role.mention}`."
+                    f"⚠️ Couldn't set up the reaction role — add it manually with "
+                    f"`/reactionrole … role:{role.mention}`."
                 )
-        else:
-            rr_note = f"⚠️ No `#{config.ROLES_CHANNEL_NAME}` — run `/setup` first."
-
-        # Persist to DB.
-        await self.bot.db.add_project(
-            channel.id, guild.id, name, role.id, lead.id, desc, tags
-        )
 
         await interaction.followup.send(
             f"✅ **{name}** is ready!\n"
