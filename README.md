@@ -1,6 +1,6 @@
 # 🐯 TaigaBot
 
-A Discord moderation + verification bot for the **RIT AI Club**, with a tsundere
+A Discord moderation + verification bot for the **RIT AI Club**, with a mean
 personality, university-email verification, auto-moderation, leveling, AI/ML
 commands, and reaction roles.
 
