@@ -546,13 +546,23 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
                     overwrites=overwrites,
                     reason=f"TaigaBot: project channel for {name}",
                 )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "⛔ I couldn't create the project's role/channel. I need **Manage Roles** "
-                "and **Manage Channels**, and my **TaigaBot** role must sit near the top "
-                "in **Server Settings → Roles**. Fix that and run `/createproject` again.",
-                ephemeral=True,
-            )
+        except discord.Forbidden as e:
+            if e.code == 60003:
+                msg = (
+                    "⛔ This server **requires 2FA for moderation actions**, but the "
+                    "bot's owner account doesn't have 2FA enabled — so Discord blocks "
+                    "this even though my permissions are fine. Enable 2FA on the bot "
+                    "owner's Discord account, or turn off **Server Settings → Safety "
+                    "Setup → Require 2FA for moderation**."
+                )
+            else:
+                msg = (
+                    f"⛔ Discord blocked the project setup (Forbidden: "
+                    f"{e.text or 'missing access'}). Check I have **Manage Roles** and "
+                    "**Manage Channels** and that my **TaigaBot** role sits near the top "
+                    "in **Server Settings → Roles**."
+                )
+            await interaction.followup.send(msg, ephemeral=True)
             return
         except discord.HTTPException as e:
             await interaction.followup.send(

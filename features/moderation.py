@@ -221,6 +221,23 @@ class Moderation(commands.Cog):
 
     # ── moderation commands (Eboard) ──────────────────────────────────────
     @staticmethod
+    def _forbidden_text(e: discord.Forbidden, action: str, perm: str) -> str:
+        """A clear message for a 403 — distinguishing the server's 2FA-for-mods
+        requirement (which blocks even a fully-permissioned bot) from a plain
+        missing-permission / role-position problem."""
+        if e.code == 60003:
+            return (
+                f"⛔ This server **requires 2FA for moderation actions**, but the bot's "
+                f"owner account doesn't have 2FA enabled — so Discord blocks {action} "
+                f"even with permissions. Enable 2FA on the bot owner's Discord account, "
+                f"or turn off **Server Settings → Safety Setup → Require 2FA**."
+            )
+        return (
+            f"⛔ I couldn't {action} — I need the **{perm}** permission and my role must "
+            f"be above theirs."
+        )
+
+    @staticmethod
     def _cannot_act(interaction: discord.Interaction, member: discord.Member) -> str | None:
         """Return a human-readable reason this action can't proceed, or None if
         it's fine. Catches the usual failures up front (self/owner/hierarchy) so
@@ -256,10 +273,9 @@ class Moderation(commands.Cog):
         )
         try:
             await member.kick(reason=f"{interaction.user}: {reason}")
-        except discord.Forbidden:
+        except discord.Forbidden as e:
             await interaction.followup.send(
-                "⛔ I couldn't kick them — I need the **Kick Members** permission and "
-                "my role must be above theirs.", ephemeral=True
+                self._forbidden_text(e, "kick them", "Kick Members"), ephemeral=True
             )
             return
         note = "" if dmed else "\n*(couldn't DM them — DMs may be off.)*"
@@ -283,10 +299,9 @@ class Moderation(commands.Cog):
         )
         try:
             await member.ban(reason=f"{interaction.user}: {reason}", delete_message_days=1)
-        except discord.Forbidden:
+        except discord.Forbidden as e:
             await interaction.followup.send(
-                "⛔ I couldn't ban them — I need the **Ban Members** permission and "
-                "my role must be above theirs.", ephemeral=True
+                self._forbidden_text(e, "ban them", "Ban Members"), ephemeral=True
             )
             return
         note = "" if dmed else "\n*(couldn't DM them — DMs may be off.)*"
@@ -313,10 +328,10 @@ class Moderation(commands.Cog):
         until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
         try:
             await member.timeout(until, reason=f"{interaction.user}: {reason}")
-        except discord.Forbidden:
+        except discord.Forbidden as e:
             await interaction.followup.send(
-                "⛔ I couldn't time them out — I need the **Moderate Members** "
-                "permission and my role must be above theirs.", ephemeral=True
+                self._forbidden_text(e, "time them out", "Moderate Members"),
+                ephemeral=True,
             )
             return
         await interaction.followup.send(
