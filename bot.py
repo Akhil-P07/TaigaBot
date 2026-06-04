@@ -58,15 +58,24 @@ class TaigaBot(commands.Bot):
                 log.error("Failed to load %s:\n%s", module, traceback.format_exc())
         log.info("Loaded %d feature module(s).", loaded)
 
-        # Sync slash commands. Guild sync is instant; global can take ~1 hour.
+        # Sync slash commands. Global sync makes commands available in every
+        # guild the bot is in (and any it's later invited to), but can take up
+        # to ~1 hour to propagate. If GUILD_ID is set, we ALSO copy the commands
+        # to that guild for instant updates — handy as a dev/test server.
+        synced = await self.tree.sync()
+        log.info("Synced %d command(s) globally.", len(synced))
         if config.GUILD_ID:
             guild = discord.Object(id=config.GUILD_ID)
             self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            log.info("Synced %d command(s) to guild %s.", len(synced), config.GUILD_ID)
-        else:
-            synced = await self.tree.sync()
-            log.info("Synced %d command(s) globally.", len(synced))
+            guild_synced = await self.tree.sync(guild=guild)
+            log.info(
+                "Also synced %d command(s) instantly to dev guild %s.",
+                len(guild_synced),
+                config.GUILD_ID,
+            )
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        log.info("Joined guild: %s (id=%s, %d members)", guild.name, guild.id, guild.member_count)
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)

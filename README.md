@@ -8,6 +8,11 @@ Every feature is a self-contained module in [`features/`](features/) that the bo
 auto-loads on startup, so you can add or remove features just by adding/deleting
 files there.
 
+**Multi-guild:** slash commands sync globally, so the bot works in **every server
+it's invited to**. All per-server data (XP, warnings, banned words, automod
+settings, reaction roles) is keyed by guild, and roles/channels are resolved by
+name within each guild. One exception — see the verification note below.
+
 ---
 
 ## Features
@@ -40,10 +45,14 @@ py -m pip install -r requirements.txt
 2. **Bot** tab → **Reset Token** → copy it into `.env` as `DISCORD_TOKEN`.
 3. Under **Privileged Gateway Intents**, enable **SERVER MEMBERS INTENT** and
    **MESSAGE CONTENT INTENT** (both are required).
-4. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`;
+4. To let the bot run on servers other than your own, enable **Public Bot** on the
+   **Bot** tab. (Discord requires app verification once you pass **100 servers** to
+   keep the privileged intents above.)
+5. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`;
    bot permissions: *Manage Roles, Manage Channels, Kick, Ban, Moderate Members,
    Manage Messages, Read Messages/View Channels, Send Messages, Add Reactions,
-   Embed Links, Read Message History*. Open the generated URL to invite the bot.
+   Embed Links, Read Message History*. Open (or share) the generated URL to invite
+   the bot to any server.
 
 ### 3. Gmail for OTP emails
 1. Use/create a Gmail account for the bot and enable **2-Step Verification**.
@@ -54,7 +63,8 @@ py -m pip install -r requirements.txt
 ### 4. Configure
 ```powershell
 copy .env.example .env
-# then edit .env (token, gmail, GUILD_ID for instant command sync)
+# then edit .env (token, gmail). GUILD_ID is optional — set it to a test server
+# for instant command updates; leave blank in production (commands sync globally).
 ```
 
 ### 5. Run
@@ -88,6 +98,13 @@ Then `/health` shows whether everything is wired up correctly.
 
 One email = one account (re-use is blocked). Eboard can `/whois @member` to see a
 member's stored info or `/unverify @member` to reset them.
+
+> **Multi-guild note:** verification is the one feature with *global* settings —
+> the allowed email domains (`ALLOWED_EMAIL_DOMAINS`) and the sending Gmail account
+> come from `.env` and apply to **every** server the bot is in. It's built for a
+> single university club, so if you invite the bot elsewhere, those servers will
+> also gatekeep on your configured domains using your Gmail account. Everything
+> else (moderation, leveling, reaction roles, welcome) is fully per-server.
 
 ---
 
@@ -134,6 +151,7 @@ TaigaBot/
 ├─ config.py           # reads .env
 ├─ database.py         # async SQLite layer (bot.db)
 ├─ personality.py      # ✏️ editable tsundere lines
+├─ keep_alive.py       # tiny HTTP server for free hosts (Replit) uptime pings
 ├─ requirements.txt
 ├─ .env.example
 ├─ utils/              # checks.py, emailer.py, guildutils.py
