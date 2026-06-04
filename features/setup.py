@@ -167,16 +167,21 @@ class Setup(commands.Cog):
             )
         steps.append(msg)
 
-        # 4. Assign Unverified to all existing members who aren't verified.
-        assigned = 0
-        skipped_verified = 0
+        # 4. Reconcile existing members:
+        #    • already verified (in the DB) → give them the Verified role here
+        #      (covers people who verified before, or on another server this bot
+        #      runs, since on_member_join doesn't fire for members already present)
+        #    • everyone else → give them Unverified
+        assigned = 0   # received Unverified
+        promoted = 0   # received Verified (were verified already)
         async for member in guild.fetch_members(limit=None):
             if member.bot:
                 continue
-            if gu.verified_role(guild) in member.roles or await self.bot.db.user_is_verified(
-                member.id
-            ):
-                skipped_verified += 1
+            if await self.bot.db.user_is_verified(member.id):
+                had_role = verified in member.roles
+                await gu.promote_to_verified(member)  # idempotent; also strips Unverified
+                if not had_role:
+                    promoted += 1
                 continue
             if unverified not in member.roles:
                 try:
@@ -185,8 +190,8 @@ class Setup(commands.Cog):
                 except discord.Forbidden:
                     pass
         steps.append(
-            f"Assigned **{config.UNVERIFIED_ROLE_NAME}** to {assigned} member(s) "
-            f"({skipped_verified} already verified/skipped)."
+            f"Assigned **{config.UNVERIFIED_ROLE_NAME}** to {assigned} member(s); "
+            f"granted **{config.VERIFIED_ROLE_NAME}** to {promoted} already-verified member(s)."
         )
 
         embed = discord.Embed(
