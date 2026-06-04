@@ -104,10 +104,12 @@ async def on_app_command_error(
     if isinstance(error, NotEboard):
         sass = personality.say("permission_denied")
         msg = f"⛔ {error}" + (f"\n*{sass}*" if sass else "")
+    elif isinstance(error, discord.app_commands.CommandOnCooldown):
+        # NB: must come before the generic CheckFailure branch below —
+        # CommandOnCooldown subclasses CheckFailure, so order matters.
+        msg = f"⏳ Slow down — try again in {error.retry_after:.0f}s."
     elif isinstance(error, discord.app_commands.CheckFailure):
         msg = "⛔ You don't have permission to use this command."
-    elif isinstance(error, discord.app_commands.CommandOnCooldown):
-        msg = f"⏳ Slow down — try again in {error.retry_after:.0f}s."
     else:
         log.error("Command error: %s\n%s", error, traceback.format_exc())
         msg = "⚠️ Something went wrong running that command."
