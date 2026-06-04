@@ -213,10 +213,17 @@ class Setup(commands.Cog):
         core_ids = {
             unverified_ch.id, welcome_ch.id, modlog_ch.id, backups_ch.id, roles_ch.id,
         }
+        ignore_ids = config.GATING_IGNORE_IDS
         gated = 0
+        ignored = 0
         skipped_names: list[str] = []
         for ch in guild.channels:
             if ch.id in core_ids:
+                continue
+            # Leave alone anything in the ignore list, by its own id or its
+            # category's id (so a category id skips all channels inside it).
+            if ch.id in ignore_ids or getattr(ch, "category_id", None) in ignore_ids:
+                ignored += 1
                 continue
             ok = await self._set_perms(
                 ch, guild.default_role, view_channel=False,
@@ -234,6 +241,8 @@ class Setup(commands.Cog):
             else:
                 skipped_names.append(ch.name)
         msg = f"Gated {gated} channel(s) behind the **{config.VERIFIED_ROLE_NAME}** role."
+        if ignored:
+            msg += f" Left {ignored} channel(s) alone (in GATING_IGNORE)."
         if skipped_names:
             shown = ", ".join(f"`{n}`" for n in skipped_names[:10])
             extra = f" (+{len(skipped_names) - 10} more)" if len(skipped_names) > 10 else ""

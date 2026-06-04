@@ -46,6 +46,15 @@ def _flag(name: str, default: str = "0") -> bool:
     return _get(name, default).lower() in ("1", "true", "yes", "on")
 
 
+# ── Channels /setup should NOT gate ──────────────────────────────────────────
+# Comma-separated channel/category IDs that /setup leaves untouched (no
+# @everyone-deny / Verified-allow). Put a CATEGORY id to skip every channel in
+# it — e.g. a "Projects/Interests" category you gate behind interest roles
+# yourself. Right-click -> Copy Channel/Category ID (Developer Mode on).
+GATING_IGNORE_IDS: set[int] = {
+    int(x) for x in _get("GATING_IGNORE").replace(" ", "").split(",") if x.isdigit()
+}
+
 # ── Fresh-start role reset (DESTRUCTIVE, opt-in) ─────────────────────────────
 # When True, /setup first removes every member's roles (except Eboard, Verified,
 # Unverified, managed/bot roles, and any role above TaigaBot) so that nobody

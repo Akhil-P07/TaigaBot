@@ -115,6 +115,23 @@ access until they re-verify and re-pick their roles in `#roles`.
 > run `/setup` once, then set it back to `0`. Leave it off (the default) for
 > normal servers.
 
+#### Optional: exclude channels/categories from gating (`GATING_IGNORE`)
+By default `/setup` grants `Verified` view on **every** channel. If you have a
+category you'd rather gate behind **interest/project roles** (not just
+verification), list its **ID** in `GATING_IGNORE` (comma-separated; a category
+ID skips every channel inside it). `/setup` then leaves those channels' perms
+entirely alone — and won't clobber them on re-runs.
+
+Typical setup for a Projects/Interests category, done by hand once it's excluded:
+on the **category**, deny View Channel for `@everyone` **and** `Verified`; on
+each project channel, **allow** View Channel for that project's role. Because an
+allow overrides a deny, a verified member sees a project channel only once they
+pick its role in `#roles` — while staying hidden from everyone else.
+
+> Get an ID with **right-click → Copy Channel/Category ID** (Developer Mode on).
+> For the inheritance to work, keep the project channels **synced** to the
+> category (right-click a channel → *Sync permissions to category*).
+
 > **Important:** In *Server Settings → Roles*, drag **TaigaBot's** role **above**
 > the `Unverified`/`Verified` roles (and any reaction-role roles), or it can't
 > manage them.
