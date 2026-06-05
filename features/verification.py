@@ -279,6 +279,17 @@ class Verification(commands.Cog):
             )
             return
 
+        # Looking up the bot itself? Skip the DB and sass them.
+        if member.id == self.bot.user.id:
+            quip = random.choice([
+                "tf you mean who am I? I'm the Palmtop Tiger. Obviously.",
+                "Run /whois on me again. I dare you. ...I'm the one in charge here.",
+                "Me? I don't need verifying, I AM the verification. Hmph.",
+                "Who am I? Rude. I'm TaigaBot. Your better, basically.",
+            ])
+            await interaction.response.send_message(quip, ephemeral=True)
+            return
+
         row = await self.bot.db.get_verified_user(member.id)
         if row is None:
             await interaction.response.send_message(
