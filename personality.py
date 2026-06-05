@@ -77,6 +77,9 @@ LINES: dict[str, list[str]] = {
     "thanks": [
         "Hmph, of course. I'm the best, after all.",
         "Don't mention it. Seriously, don't.",
+        "Just doing my job. A job I'm extremely good at, might I add.",
+        "Tch. You'd be lost without me. ...Not that I mind. Much.",
+        "I-I didn't do it for YOU specifically. ...Glad it helped, though.",
     ],
     # When someone mentions "Ryuji" — Taiga plays dumb (badly).
     "ryuji": [
@@ -89,7 +92,6 @@ LINES: dict[str, list[str]] = {
     "height": [
         "Say one more word about my height and I'll knock you into next semester!",
         "My height? My fist is about to be at YOUR face level. Keep talking.",
-        "I am NOT short! I'm fun-sized, and I WILL fight you over it!",
         "Ask about my height again. I dare you. ...See what happens.",
         "Tall enough to reach your nose when I punch it. Wanna test it?!",
     ],
