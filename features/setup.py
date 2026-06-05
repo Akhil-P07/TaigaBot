@@ -362,6 +362,15 @@ class Setup(commands.Cog):
             ok &= await self._set_perms(
                 ch, eboard, view_channel=True, reason="TaigaBot: eboard can view"
             )
+            # Keep the bot itself able to see (and moderate) the channel — the
+            # @everyone deny above would otherwise lock it out, since the bot is
+            # just an @everyone member for permissions. Without this, automod and
+            # leveling stop working in every gated channel.
+            ok &= await self._set_perms(
+                ch, guild.me, view_channel=True, send_messages=True,
+                read_message_history=True,
+                reason="TaigaBot: keep bot access to gated channel",
+            )
             if ok:
                 gated += 1
             else:

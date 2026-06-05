@@ -87,6 +87,30 @@ def _is_auto_accept(project) -> bool:
     return False
 
 
+def _is_reserved_name(name: str, bot, guild: discord.Guild) -> bool:
+    """True if a project can't safely use this name because the matching role
+    would collide with the bot's own role or a system/managed role — which breaks
+    role hierarchy and permissions (e.g. a project literally named 'TaigaBot')."""
+    n = name.strip().lower()
+    reserved = {
+        config.VERIFIED_ROLE_NAME.lower(),
+        config.UNVERIFIED_ROLE_NAME.lower(),
+        config.EBOARD_ROLE_NAME.lower(),
+        "everyone", "here", "@everyone", "@here",
+    }
+    if bot.user:
+        reserved.add(bot.user.name.lower())
+    if n in reserved:
+        return True
+    # Also block names matching an existing managed/integration role, or any role
+    # at or above the bot's own — creating/assigning those would fail or clobber.
+    me_top = guild.me.top_role if guild.me else None
+    for r in guild.roles:
+        if r.name.lower() == n and (r.managed or (me_top is not None and r >= me_top)):
+            return True
+    return False
+
+
 def _distinct_tags(rows) -> list[str]:
     """Sorted list of every unique tag across the given project rows."""
     tags: set[str] = set()
@@ -436,6 +460,17 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         name = self.project_name.value.strip()
+
+        # Block names that would collide with the bot's own role or a system role
+        # (e.g. a project named "TaigaBot"), which breaks role hierarchy.
+        if _is_reserved_name(name, self.bot, guild):
+            await interaction.response.send_message(
+                f"⛔ **{name}** can't be used as a project name — it collides with a "
+                "bot or system role and would break role permissions. Pick a "
+                "different name.",
+                ephemeral=True,
+            )
+            return
 
         # If a project with this name already exists, don't make a new channel —
         # link to the existing one: ask for the role @ and the lead instead.
