@@ -367,10 +367,15 @@ def _taiga_html() -> str:
 
 
 def _club_footer() -> str:
-    """'Made for the RIT AI Club' with the club logo as a small inline mark."""
+    """'Made by RIT AI' with the club logo as a small inline mark that links to the
+    club website (config.CLUB_URL)."""
     logo = _club_logo_src()
-    mark = f'<img class="footer-logo" src="{logo}" alt="RIT AI Club">' if logo else ""
-    return f"{mark}Made for the RIT AI Club"
+    if not logo:
+        return "Made by RIT AI"
+    img = f'<img class="footer-logo" src="{logo}" alt="RIT AI">'
+    url = config.CLUB_URL
+    mark = f'<a href="{html.escape(url)}" target="_blank" rel="noopener">{img}</a>' if url else img
+    return f"{mark}Made by RIT AI"
 
 
 def _landing_html(bot) -> str:

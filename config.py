@@ -25,6 +25,8 @@ DISCORD_CLIENT_ID: str = _get("DISCORD_CLIENT_ID")
 # Public repo URL, shown as a "Build on GitHub" link on the landing page. Blank
 # hides it.
 GITHUB_URL: str = _get("GITHUB_URL")
+# Club website — the footer logo links here. Blank makes the logo non-clickable.
+CLUB_URL: str = _get("CLUB_URL", "https://campusgroups.rit.edu/ritai/home/")
 
 # ── Email / OTP ────────────────────────────────────────────────────────────
 # OTP emails are sent via Brevo's HTTP API (port 443), because hosts like
