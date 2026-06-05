@@ -126,7 +126,8 @@ class Help(commands.Cog):
                     "`/ban member [reason]` — ban (DMs the user)\n"
                     "`/timeout member minutes [reason]` — timeout\n"
                     "`/warn member reason` — warn (DMs the user)\n"
-                    "`/warnings member` • `/clearwarnings member` — view/clear warnings\n"
+                    "`/warnings member` • `/clearwarnings member` — view/clear warnings "
+                    "(flags cross-server repeat offenders)\n"
                     "`/purge amount` — bulk-delete recent messages"
                 ),
                 inline=False,

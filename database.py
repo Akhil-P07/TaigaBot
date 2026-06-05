@@ -392,6 +392,21 @@ class Database:
         await self.conn.commit()
         return cur.rowcount
 
+    async def cross_server_warnings(self, user_id: int, exclude_guild_id: int) -> tuple[int, int]:
+        """Cross-server repeat-offender summary: (other_servers, other_warnings) —
+        how many OTHER guilds this bot is in have warned the user, and the total
+        warnings there. Counts only, no details/server names, so it's a privacy-
+        preserving marker rather than exposing another club's mod history."""
+        cur = await self.conn.execute(
+            "SELECT COUNT(DISTINCT guild_id) AS servers, COUNT(*) AS warns "
+            "FROM warnings WHERE user_id = ? AND guild_id != ?",
+            (user_id, exclude_guild_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return (0, 0)
+        return (row["servers"] or 0, row["warns"] or 0)
+
     # ── reaction roles ────────────────────────────────────────────────────
     async def add_reaction_role(
         self, guild_id: int, message_id: int, emoji: str, role_id: int

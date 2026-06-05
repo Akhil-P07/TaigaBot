@@ -379,11 +379,24 @@ class Moderation(commands.Cog):
     @is_eboard()
     async def warnings(self, interaction: discord.Interaction, member: discord.Member):
         rows = await self.bot.db.get_warnings(interaction.guild_id, member.id)
+        # Hidden cross-server repeat-offender marker (Eboard-only): a count of how
+        # many OTHER TaigaBot servers have warned this user — no details/names.
+        other_servers, other_warns = await self.bot.db.cross_server_warnings(
+            member.id, interaction.guild_id
+        )
+        cross = (
+            f"🌐 **Repeat offender:** also warned in **{other_servers}** other "
+            f"TaigaBot server(s) — {other_warns} warning(s) total there."
+            if other_servers else ""
+        )
+
         if not rows:
-            await interaction.response.send_message(
-                f"{member} has no warnings. 🎉", ephemeral=True
-            )
+            msg = f"{member} has no warnings here. 🎉"
+            if cross:
+                msg += f"\n{cross}"
+            await interaction.response.send_message(msg, ephemeral=True)
             return
+
         embed = discord.Embed(title=f"Warnings — {member}", color=discord.Color.orange())
         for r in rows[:25]:
             embed.add_field(
@@ -391,6 +404,8 @@ class Moderation(commands.Cog):
                 value=f"{r['reason']} — <@{r['moderator_id']}>",
                 inline=False,
             )
+        if cross:
+            embed.add_field(name="🌐 Cross-server", value=cross, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="clearwarnings", description="(Eboard) Clear a member's warnings.")
@@ -461,6 +476,14 @@ class Moderation(commands.Cog):
         if streak % SPAM_WARN_ESCALATE != 0:
             return
 
+        other_servers, other_warns = await self.bot.db.cross_server_warnings(
+            member.id, guild.id
+        )
+        cross = (
+            f"\n🌐 **Repeat offender:** also warned in **{other_servers}** other "
+            f"TaigaBot server(s) ({other_warns} warning(s) total)."
+            if other_servers else ""
+        )
         embed = discord.Embed(
             title="⚠️ Repeat spammer — auto-warn",
             description=(
@@ -468,7 +491,7 @@ class Moderation(commands.Cog):
                 f"**Channel:** {message.channel.mention}\n"
                 f"**Auto-warns this session:** {streak}\n"
                 f"**Total warnings on record:** {total}\n"
-                f"**Reason:** {reason}"
+                f"**Reason:** {reason}{cross}"
             ),
             color=discord.Color.orange(),
         )
