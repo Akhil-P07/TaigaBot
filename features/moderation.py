@@ -13,6 +13,7 @@ Moderation commands (Eboard role only): /kick /ban /timeout /warn /warnings
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from collections import defaultdict, deque
@@ -25,6 +26,8 @@ import config
 import personality
 from utils import guildutils as gu
 from utils.checks import is_eboard, member_has_role
+
+log = logging.getLogger("taigabot.automod")
 
 INVITE_RE = re.compile(r"(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)", re.I)
 MAX_MENTIONS = 10  # delete messages with MORE than this many user+role pings (mention-bomb guard)
@@ -49,6 +52,9 @@ class Moderation(commands.Cog):
         self._recent: dict[tuple[int, int], deque] = defaultdict(lambda: deque(maxlen=SPAM_THRESHOLD))
         # (guild_id, user_id) -> last auto-warn timestamp (anti-flood)
         self._last_autowarn: dict[tuple[int, int], float] = {}
+        # (guild_id, user_id) -> count of auto-warns this session (drives the
+        # "DM Eboard every Nth" escalation, independent of manual warns/clears)
+        self._autowarn_count: dict[tuple[int, int], int] = {}
 
     # ── automod listener ──────────────────────────────────────────────────
     @commands.Cog.listener()
@@ -430,8 +436,18 @@ class Moderation(commands.Cog):
         reason = "Automod: spamming (too many messages too fast)"
         await self.bot.db.add_warning(guild.id, member.id, self.bot.user.id, reason)
         total = len(await self.bot.db.get_warnings(guild.id, member.id))
+        # Count auto-warns ourselves so the "every Nth" escalation is reliable —
+        # the DB total mixes in manual warnings and resets on /clearwarnings.
+        streak = self._autowarn_count.get(key, 0) + 1
+        self._autowarn_count[key] = streak
+        log.info(
+            "Auto-warned %s in guild %s (DB total=%d, auto-streak=%d).",
+            member, guild.id, total, streak,
+        )
 
-        # Let the offender know (every time they trip it).
+        # Let the offender know (best-effort — they may have DMs closed, and
+        # Discord blocks repeated unsolicited bot DMs; the in-channel notice and
+        # the recorded warning still happen regardless).
         try:
             await member.send(
                 f"⚠️ You were automatically warned in **{guild.name}** for spamming. "
@@ -440,25 +456,30 @@ class Moderation(commands.Cog):
         except discord.HTTPException:
             pass
 
-        # Only escalate to the Eboard once the user has built up several warnings,
-        # then only at each multiple — keeps their DMs from being flooded.
-        if total < SPAM_WARN_ESCALATE or total % SPAM_WARN_ESCALATE != 0:
+        # Escalate to the Eboard every SPAM_WARN_ESCALATE auto-warns (3rd, 6th, …)
+        # so they're notified about a repeat offender without being flooded.
+        if streak % SPAM_WARN_ESCALATE != 0:
             return
 
         embed = discord.Embed(
             title="⚠️ Repeat spammer — auto-warn",
             description=(
-                f"**User:** {member} (`{member.id}`)\n"
+                f"**User:** {member.mention} ({member} `{member.id}`)\n"
                 f"**Channel:** {message.channel.mention}\n"
-                f"**Total warnings:** {total}\n"
+                f"**Auto-warns this session:** {streak}\n"
+                f"**Total warnings on record:** {total}\n"
                 f"**Reason:** {reason}"
             ),
             color=discord.Color.orange(),
         )
         embed.set_footer(text=f"{guild.name} • automod")
-        await self._dm_eboard(guild, embed)
-
-        # Mirror to the mod-log channel too, so it isn't only in DMs.
+        reached = await self._dm_eboard(guild, embed)
+        log.info(
+            "Escalated repeat spammer %s to Eboard: DMed %d member(s)%s.",
+            member, reached,
+            "" if reached else " (none reached — Eboard DMs closed or role empty)",
+        )
+        # Always mirror to #mod-log so it lands even if Eboard DMs are closed.
         await gu.log_mod_action(guild, embed)
 
     @staticmethod
