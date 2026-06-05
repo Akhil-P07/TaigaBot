@@ -54,7 +54,8 @@ class Help(commands.Cog):
             value=(
                 "`/projects [tag]` — browse all projects, optionally filtered by tag\n"
                 "`/projecttags` — list all project tags\n"
-                "`/joinproject [tag]` — request to join a project (lead approves/denies via DM)"
+                "`/joinproject [tag]` — request to join a project (lead approves/denies via DM)\n"
+                "`/leaveproject` — leave a project you've joined"
             ),
             inline=False,
         )

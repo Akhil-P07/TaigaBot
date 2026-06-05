@@ -24,7 +24,7 @@ everywhere) and their verification status (see the verification note below).
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/whois` (Eboard), `/unverify` (Eboard) |
 | **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
-| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/projects`, `/projecttags` |
+| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
@@ -177,6 +177,9 @@ A lightweight project directory with self-service joining.
   granted automatically; either way the requester is DM'd the outcome.
   Projects tagged **`open-source`** skip approval entirely — `/joinproject` grants
   the role instantly (tag match is case/space/hyphen-insensitive).
+- **`/leaveproject`** — leave a project you're in; drops its role. **Project leads
+  can't leave this way** (they'd orphan the project) — an Eboard member uses
+  `/dropproject` instead.
 - **`/dropproject`** (Eboard) — select a project to delete its channel and role.
 
 **Recommended:** put your projects in one category and **exclude that category**

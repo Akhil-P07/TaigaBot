@@ -21,6 +21,9 @@
   Projects tagged `open-source` (case/space/hyphen-insensitive) skip approval —
   /joinproject grants the role instantly.
 
+/leaveproject: a member leaves a project they're in (drops the role). Project
+  leads can't leave this way — they ask Eboard to /dropproject instead.
+
 /projects [tag]: browse all projects, optionally filtered by tag.
 """
 from __future__ import annotations
@@ -690,6 +693,60 @@ class _JoinView(discord.ui.View):
         self.stop()
 
 
+# ── /leaveproject views ───────────────────────────────────────────────────────
+
+class _LeaveSelect(discord.ui.Select):
+    def __init__(self, projects: list):
+        options = [
+            discord.SelectOption(
+                label=row["name"][:100],
+                value=str(row["channel_id"]),
+                description=(
+                    _fmt_tags(row["tags"]).replace("`", "")[:100]
+                    if row["tags"] else "No tags"
+                ),
+            )
+            for row in projects[:25]
+        ]
+        super().__init__(
+            placeholder="Pick a project to leave…",
+            min_values=1, max_values=1, options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class _LeaveView(discord.ui.View):
+    def __init__(self, projects: list):
+        super().__init__(timeout=120)
+        self.select = _LeaveSelect(projects)
+        self.add_item(self.select)
+        self.confirmed = False
+        self.channel_id: int | None = None
+
+    @discord.ui.button(label="👋 Leave project", style=discord.ButtonStyle.danger, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.select.values:
+            await interaction.response.send_message(
+                "Please select a project first.", ephemeral=True
+            )
+            return
+        self.channel_id = int(self.select.values[0])
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="👋 Leaving…", view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="❌ Cancelled.", view=self)
+        self.stop()
+
+
 # ── /dropproject views ────────────────────────────────────────────────────────
 
 class _DropSelect(discord.ui.Select):
@@ -1121,6 +1178,65 @@ class Projects(commands.Cog):
                 "Ask an Eboard member to add you manually.",
                 ephemeral=True,
             )
+
+    # ── /leaveproject ──────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="leaveproject",
+        description="Leave a project you've joined (removes its role).",
+    )
+    async def leaveproject(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        member = interaction.user
+        # Projects this member is actually in (holds the role).
+        mine = [
+            p for p in await self.bot.db.list_projects(guild.id)
+            if (r := guild.get_role(p["role_id"])) is not None and r in member.roles
+        ]
+        if not mine:
+            await interaction.response.send_message(
+                "You're not in any projects.", ephemeral=True
+            )
+            return
+
+        view = _LeaveView(mine)
+        await interaction.response.send_message(
+            "**Leave a project**\nPick the one you want to leave.",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.confirmed or view.channel_id is None:
+            return
+
+        project = await self.bot.db.get_project(view.channel_id)
+        if project is None:
+            await interaction.followup.send("That project no longer exists.", ephemeral=True)
+            return
+
+        # Leads can't leave on their own — they must ask Eboard to drop the project.
+        if member.id in _parse_leads(project):
+            await interaction.followup.send(
+                f"⛔ You're a lead of **{project['name']}**, so you can't leave it "
+                "yourself. Ask an Eboard member to `/dropproject` instead.",
+                ephemeral=True,
+            )
+            return
+
+        role = guild.get_role(project["role_id"])
+        if role and role in member.roles:
+            try:
+                await member.remove_roles(role, reason="Left project via /leaveproject")
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "⛔ I couldn't remove the role — my role may be too low. "
+                    "Ask an Eboard member.",
+                    ephemeral=True,
+                )
+                return
+        await interaction.followup.send(
+            f"👋 You left **{project['name']}**.", ephemeral=True
+        )
 
     # ── /projects ──────────────────────────────────────────────────────────
 
