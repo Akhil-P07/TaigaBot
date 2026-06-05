@@ -94,6 +94,7 @@ class Verification(commands.Cog):
         name="Your real name (first and last)",
         email="Your university email (@rit.edu or @g.rit.edu)",
     )
+    @app_commands.checks.cooldown(1, 60.0)  # 1 /verify per 60s per user (anti email-spam)
     async def verify(self, interaction: discord.Interaction, name: str, email: str):
         member = interaction.user
         email = email.strip().lower()

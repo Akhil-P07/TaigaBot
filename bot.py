@@ -107,7 +107,7 @@ async def on_app_command_error(
     elif isinstance(error, discord.app_commands.CommandOnCooldown):
         # NB: must come before the generic CheckFailure branch below —
         # CommandOnCooldown subclasses CheckFailure, so order matters.
-        msg = f"⏳ Slow down — try again in {error.retry_after:.0f}s."
+        msg = f"⏳ Slow down, try again in {error.retry_after:.0f}s."
     elif isinstance(error, discord.app_commands.CheckFailure):
         msg = "⛔ You don't have permission to use this command."
     else:
