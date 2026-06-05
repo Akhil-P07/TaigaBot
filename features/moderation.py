@@ -27,7 +27,7 @@ from utils import guildutils as gu
 from utils.checks import is_eboard, member_has_role
 
 INVITE_RE = re.compile(r"(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)", re.I)
-MAX_MENTIONS = 5
+MAX_MENTIONS = 10  # delete messages with MORE than this many user+role pings (mention-bomb guard)
 SPAM_WINDOW_SEC = 7
 SPAM_THRESHOLD = 5  # messages within window
 CAPS_MIN_LEN = 12
@@ -106,10 +106,18 @@ class Moderation(commands.Cog):
             await punish("posting invite links isn't allowed here.")
             return
 
-        # mass mentions
-        if settings["filter_mentions"] and len(message.mentions) > MAX_MENTIONS:
-            await punish("please don't mass-mention people.")
-            return
+        # mass mentions — guards against mention bombing. Covers @everyone/@here
+        # (not counted in message.mentions) and too many pings. Uses raw_* counts,
+        # which include REPEATS of the same user/role (message.mentions dedupes,
+        # so 20x @same-person would otherwise read as 1).
+        if settings["filter_mentions"]:
+            if message.mention_everyone:
+                await punish("please don't ping @everyone or @here.")
+                return
+            ping_count = len(message.raw_mentions) + len(message.raw_role_mentions)
+            if ping_count > MAX_MENTIONS:
+                await punish("please don't mass-mention people.")
+                return
 
         # caps
         if settings["filter_caps"] and len(content) >= CAPS_MIN_LEN:
