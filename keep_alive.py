@@ -22,7 +22,9 @@ import html
 import logging
 import os
 import pathlib
+import time
 import urllib.parse
+from collections import defaultdict, deque
 
 import discord
 from aiohttp import web
@@ -33,6 +35,50 @@ log = logging.getLogger("taigabot.web")
 
 ASSETS_DIR = pathlib.Path(__file__).parent / "assets"
 _LOGO_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif")
+
+# Per-IP rate limit for the public web pages (free, in-process). Stops a single
+# client from hammering the bot's event loop. Not a substitute for an edge WAF
+# against large volumetric DDoS, but plenty for a club bot.
+RATE_LIMIT_MAX = 30        # requests allowed...
+RATE_LIMIT_WINDOW = 60.0   # ...per this many seconds, per IP
+_hits: dict[str, deque] = defaultdict(deque)
+_last_prune = 0.0
+
+
+def _client_ip(request: web.Request) -> str:
+    """Real client IP. Behind Railway's proxy the peer is the proxy, so prefer the
+    first X-Forwarded-For entry (the original client)."""
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote or "unknown"
+
+
+def _prune(now: float) -> None:
+    """Drop IPs with no recent hits so the table can't grow unbounded."""
+    global _last_prune
+    if now - _last_prune < RATE_LIMIT_WINDOW:
+        return
+    _last_prune = now
+    for ip in list(_hits):
+        dq = _hits[ip]
+        while dq and now - dq[0] > RATE_LIMIT_WINDOW:
+            dq.popleft()
+        if not dq:
+            del _hits[ip]
+
+
+@web.middleware
+async def _rate_limit(request: web.Request, handler):
+    now = time.time()
+    _prune(now)
+    dq = _hits[_client_ip(request)]
+    while dq and now - dq[0] > RATE_LIMIT_WINDOW:
+        dq.popleft()
+    if len(dq) >= RATE_LIMIT_MAX:
+        return web.Response(status=429, text="Too many requests. Slow down.")
+    dq.append(now)
+    return await handler(request)
 
 # Permissions the bot needs to do its job, encoded into the invite URL so any RIT
 # server that adds it gets the right access out of the box.
@@ -552,7 +598,7 @@ async def start_keep_alive(bot) -> None:
     background. Binds 0.0.0.0:$PORT so Railway/Render can route to it."""
     port = int(os.getenv("PORT", "8080"))
     ASSETS_DIR.mkdir(exist_ok=True)  # so add_static works even before a logo is added
-    app = web.Application()
+    app = web.Application(middlewares=[_rate_limit])
     app["bot"] = bot
     app.router.add_get("/", _landing)
     app.router.add_get("/commands", _commands)
