@@ -58,19 +58,23 @@ class TaigaBot(commands.Bot):
                 log.error("Failed to load %s:\n%s", module, traceback.format_exc())
         log.info("Loaded %d feature module(s).", loaded)
 
-        # Sync slash commands. Global sync makes commands available in every
-        # guild the bot is in (and any it's later invited to), but can take up
-        # to ~1 hour to propagate. If GUILD_ID is set, we ALSO copy the commands
-        # to that guild for instant updates — handy as a dev/test server.
+        # Sync slash commands GLOBALLY so they work in every server the bot is in
+        # (and any it's later invited to). Global sync can take up to ~1 hour to
+        # propagate the first time a command changes.
         synced = await self.tree.sync()
         log.info("Synced %d command(s) globally.", len(synced))
+        # If GUILD_ID is set, CLEAR that guild's command scope. An earlier version
+        # also copied the global commands into GUILD_ID for instant updates, but
+        # that registered every command twice in that guild (global copy + guild
+        # copy) — users saw each command duplicated. Clearing the guild scope
+        # leaves only the global set, removing those duplicates. Self-healing:
+        # keeping GUILD_ID set will scrub the dupes on the next start.
         if config.GUILD_ID:
             guild = discord.Object(id=config.GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            guild_synced = await self.tree.sync(guild=guild)
+            self.tree.clear_commands(guild=guild)
+            await self.tree.sync(guild=guild)
             log.info(
-                "Also synced %d command(s) instantly to dev guild %s.",
-                len(guild_synced),
+                "Cleared guild-scoped command copies for guild %s (removes duplicates).",
                 config.GUILD_ID,
             )
 
