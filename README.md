@@ -24,7 +24,7 @@ everywhere) and their verification status (see the verification note below).
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/whois` (Eboard), `/unverify` (Eboard) |
 | **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
-| **Projects** | `features/projects.py` | `/createproject`, `/dropproject` (Eboard), `/joinproject`, `/projects`, `/projecttags` |
+| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
@@ -163,6 +163,11 @@ A lightweight project directory with self-service joining.
   creates a **project role** (given to every lead immediately), a **channel**
   gated to that role, an intro message, and a DB record. Joining is via
   `/joinproject` (lead approval), so **no self-assign reaction role is created**.
+  If the name matches an existing project, **no new channel is made** — you pick
+  the existing role's `@` and the bot links them to that channel instead.
+- **`/editproject`** (Eboard) — pick a project; a form opens **prefilled** with its
+  name/description/tags. Saving updates the record, renames the role/channel if the
+  name changed, and **deletes + reposts** the intro message with the new details.
 - **`/projects [tag]`** — browse all projects; includes a **scrollable tag
   dropdown** to filter without typing.
 - **`/projecttags`** — list every tag and how many projects use it.
@@ -170,6 +175,8 @@ A lightweight project directory with self-service joining.
   join. **Every lead gets a DM** with Approve/Deny buttons (which survive
   restarts); any lead can decide (first to act wins). On approval the role is
   granted automatically; either way the requester is DM'd the outcome.
+  Projects tagged **`open-source`** skip approval entirely — `/joinproject` grants
+  the role instantly (tag match is case/space/hyphen-insensitive).
 - **`/dropproject`** (Eboard) — select a project to delete its channel and role.
 
 **Recommended:** put your projects in one category and **exclude that category**

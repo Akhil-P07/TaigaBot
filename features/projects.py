@@ -8,12 +8,18 @@
   instead the Eboard picks the existing role's @ (and any leads) and the bot
   links them to the existing channel/record.
 
+/editproject (Eboard): pick a project → modal prefilled with its name/description/
+  tags. Saving updates the DB, renames the role/channel if the name changed, and
+  deletes + reposts the intro message in the project channel with the new details.
+
 /dropproject (Eboard): select from DB-tracked projects to delete channel + role.
 
 /joinproject [tag]: anyone can browse projects (optionally filtered by tag),
   pick one, and request to join. Every project lead gets a DM with persistent
   Approve/Deny buttons; any lead can decide. On approval the role is granted and
   the requester is DM'd the outcome.
+  Projects tagged `open-source` (case/space/hyphen-insensitive) skip approval —
+  /joinproject grants the role instantly.
 
 /projects [tag]: browse all projects, optionally filtered by tag.
 """
@@ -63,6 +69,21 @@ def _norm_tags(raw: str) -> str:
     return ",".join(seen)
 
 
+# Projects carrying this tag let anyone join via /joinproject instantly — no lead
+# approval. Matched loosely (case/space/hyphen-insensitive), so "open-source",
+# "opensource", and "open source" all count.
+AUTO_ACCEPT_TAG = "open-source"
+
+
+def _is_auto_accept(project) -> bool:
+    """True if a project opts into instant joining via the auto-accept tag."""
+    target = AUTO_ACCEPT_TAG.replace("-", "").replace(" ", "")
+    for t in (project["tags"] or "").split(","):
+        if t.strip().lower().replace("-", "").replace(" ", "") == target:
+            return True
+    return False
+
+
 def _distinct_tags(rows) -> list[str]:
     """Sorted list of every unique tag across the given project rows."""
     tags: set[str] = set()
@@ -98,6 +119,22 @@ def _build_projects_embed(guild: discord.Guild, rows, tag: str | None) -> discor
         )
     if len(rows) > 15:
         embed.set_footer(text=f"Showing 15 of {len(rows)}.")
+    return embed
+
+
+def _build_intro_embed(name, desc, tags, lead_mentions: list[str], role) -> discord.Embed:
+    """The pinned 'intro' embed posted inside a project channel. Shared by
+    /createproject and /editproject so both render identically."""
+    embed = discord.Embed(
+        title=f"📌 {name}", description=desc, color=discord.Color(config.BOT_COLOR)
+    )
+    label = "Team Lead" + ("s" if len(lead_mentions) > 1 else "")
+    embed.add_field(name=label, value=", ".join(lead_mentions) or "—", inline=True)
+    if role is not None:
+        embed.add_field(name="Role", value=role.mention, inline=True)
+    if tags:
+        embed.add_field(name="Tags", value=_fmt_tags(tags), inline=False)
+    embed.set_footer(text="Welcome to the team! Leads approve new members from their DMs.")
     return embed
 
 
@@ -572,22 +609,11 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
             return
 
         # Intro embed (best-effort — the channel already exists either way).
-        embed = discord.Embed(
-            title=f"📌 {name}",
-            description=desc,
-            color=discord.Color(config.BOT_COLOR),
-        )
         leads_str = ", ".join(m.mention for m in leads)
-        embed.add_field(
-            name="Team Lead" + ("s" if len(leads) > 1 else ""),
-            value=leads_str, inline=True,
-        )
-        embed.add_field(name="Role", value=role.mention, inline=True)
-        if tags:
-            embed.add_field(name="Tags", value=_fmt_tags(tags), inline=False)
-        embed.set_footer(text="Welcome to the team! Leads approve new members from their DMs.")
+        embed = _build_intro_embed(name, desc, tags, [m.mention for m in leads], role)
         try:
-            await channel.send(embed=embed)
+            intro = await channel.send(embed=embed)
+            await self.bot.db.set_intro_message(channel.id, intro.id)
         except discord.HTTPException:
             pass
 
@@ -747,6 +773,123 @@ class _TagFilterView(discord.ui.View):
         self.add_item(_TagSelect(tags))
 
 
+# ── /editproject (pick a project → modal prefilled with its details) ──────────
+
+class _EditModal(discord.ui.Modal, title="Edit project details"):
+    def __init__(self, bot: commands.Bot, project):
+        super().__init__()
+        self.bot = bot
+        self.project = project
+        self.name_input = discord.ui.TextInput(
+            label="Project name", default=project["name"], max_length=50
+        )
+        self.desc_input = discord.ui.TextInput(
+            label="Description",
+            style=discord.TextStyle.paragraph,
+            default=project["description"],
+            required=False,
+            max_length=500,
+        )
+        self.tags_input = discord.ui.TextInput(
+            label="Tags (comma-separated)",
+            default=project["tags"],
+            required=False,
+            max_length=100,
+        )
+        self.add_item(self.name_input)
+        self.add_item(self.desc_input)
+        self.add_item(self.tags_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        channel_id = self.project["channel_id"]
+        name = self.name_input.value.strip() or self.project["name"]
+        desc = self.desc_input.value.strip()
+        tags = _norm_tags(self.tags_input.value or "")
+
+        await self.bot.db.update_project_details(channel_id, name, desc, tags)
+
+        channel = guild.get_channel(channel_id)
+        role = guild.get_role(self.project["role_id"])
+
+        # If the name changed, best-effort rename the role + channel to match.
+        if name != self.project["name"]:
+            if role:
+                try:
+                    await role.edit(name=name, reason="TaigaBot: project renamed")
+                except discord.HTTPException:
+                    pass
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    await channel.edit(
+                        name=_channel_name(name), reason="TaigaBot: project renamed"
+                    )
+                except discord.HTTPException:
+                    pass
+
+        # Delete the old intro message and repost it with the updated details.
+        reposted = False
+        if isinstance(channel, discord.TextChannel):
+            old_id = self.project["intro_message_id"] if "intro_message_id" in self.project.keys() else 0
+            if old_id:
+                try:
+                    old = await channel.fetch_message(old_id)
+                    await old.delete()
+                except discord.HTTPException:
+                    pass  # already gone / can't fetch — just post a fresh one
+            lead_mentions = [f"<@{i}>" for i in _parse_leads(self.project)]
+            embed = _build_intro_embed(name, desc, tags, lead_mentions, role)
+            try:
+                new_msg = await channel.send(embed=embed)
+                await self.bot.db.set_intro_message(channel_id, new_msg.id)
+                reposted = True
+            except discord.HTTPException:
+                pass
+
+        ch_ref = channel.mention if isinstance(channel, discord.TextChannel) else "the project channel"
+        note = "• Reposted the intro with the new details.\n" if reposted else ""
+        await interaction.followup.send(
+            f"✅ Updated **{name}**.\n{note}"
+            f"• Channel: {ch_ref}\n"
+            f"• Tags: {_fmt_tags(tags) or 'none'}",
+            ephemeral=True,
+        )
+
+
+class _EditSelect(discord.ui.Select):
+    def __init__(self, bot: commands.Bot, projects: list):
+        options = [
+            discord.SelectOption(
+                label=row["name"][:100],
+                value=str(row["channel_id"]),
+                description=(
+                    _fmt_tags(row["tags"]).replace("`", "")[:100]
+                    if row["tags"] else "No tags"
+                ),
+            )
+            for row in projects[:25]
+        ]
+        super().__init__(
+            placeholder="Select the project to edit…",
+            min_values=1, max_values=1, options=options,
+        )
+        self.bot = bot
+        self._map = {str(row["channel_id"]): row for row in projects}
+
+    async def callback(self, interaction: discord.Interaction):
+        # Opening the modal must be the *first* response on this interaction.
+        await interaction.response.send_modal(
+            _EditModal(self.bot, self._map[self.values[0]])
+        )
+
+
+class _EditView(discord.ui.View):
+    def __init__(self, bot: commands.Bot, projects: list):
+        super().__init__(timeout=120)
+        self.add_item(_EditSelect(bot, projects))
+
+
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
 class Projects(commands.Cog):
@@ -763,6 +906,28 @@ class Projects(commands.Cog):
     @is_eboard()
     async def createproject(self, interaction: discord.Interaction, lead: discord.Member):
         await interaction.response.send_modal(_ProjectModal(self.bot, lead))
+
+    # ── /editproject ───────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="editproject",
+        description="(Eboard) Edit a project's name, description, or tags.",
+    )
+    @is_eboard()
+    async def editproject(self, interaction: discord.Interaction):
+        projects = await self.bot.db.list_projects(interaction.guild_id)
+        if not projects:
+            await interaction.response.send_message(
+                "No projects to edit. Create one with `/createproject` first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "**Edit a project**\nPick one — a form will pop up with its current "
+            "details. Saving reposts the intro in the project channel.",
+            view=_EditView(self.bot, projects),
+            ephemeral=True,
+        )
 
     # ── /dropproject ───────────────────────────────────────────────────────
 
@@ -843,7 +1008,7 @@ class Projects(commands.Cog):
 
     @app_commands.command(
         name="joinproject",
-        description="Request to join a project. The project lead will approve or deny.",
+        description="Join a project (open-source ones are instant; others need lead approval).",
     )
     @app_commands.describe(tag="Filter projects by tag (optional)")
     async def joinproject(self, interaction: discord.Interaction, tag: str | None = None):
@@ -886,6 +1051,29 @@ class Projects(commands.Cog):
         if role and role in member.roles:
             await interaction.followup.send(
                 "You're already a member of that project!", ephemeral=True
+            )
+            return
+
+        # Open-source projects auto-accept — grant the role now, no lead approval.
+        if _is_auto_accept(project):
+            if role is None:
+                await interaction.followup.send(
+                    "⚠️ That project's role is missing — ask an Eboard member to fix it.",
+                    ephemeral=True,
+                )
+                return
+            try:
+                await member.add_roles(role, reason="Auto-join: open-source project")
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "⛔ I couldn't grant the role — my role may be too low. Ask an Eboard member.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.followup.send(
+                f"✅ Joined **{project['name']}**! It's **open-source**, so no approval "
+                f"needed — you now have {role.mention}. Welcome aboard! 🎉",
+                ephemeral=True,
             )
             return
 

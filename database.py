@@ -70,15 +70,16 @@ CREATE TABLE IF NOT EXISTS reaction_roles (
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-    channel_id  INTEGER PRIMARY KEY,
-    guild_id    INTEGER NOT NULL,
-    name        TEXT    NOT NULL,
-    role_id     INTEGER NOT NULL,
-    lead_id     INTEGER NOT NULL,
-    lead_ids    TEXT    NOT NULL DEFAULT '',
-    description TEXT    NOT NULL DEFAULT '',
-    tags        TEXT    NOT NULL DEFAULT '',
-    created_at  INTEGER NOT NULL
+    channel_id       INTEGER PRIMARY KEY,
+    guild_id         INTEGER NOT NULL,
+    name             TEXT    NOT NULL,
+    role_id          INTEGER NOT NULL,
+    lead_id          INTEGER NOT NULL,
+    lead_ids         TEXT    NOT NULL DEFAULT '',
+    description      TEXT    NOT NULL DEFAULT '',
+    tags             TEXT    NOT NULL DEFAULT '',
+    intro_message_id INTEGER NOT NULL DEFAULT 0,
+    created_at       INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS project_requests (
@@ -126,6 +127,12 @@ class Database:
             # Backfill from the single legacy lead_id.
             await self.conn.execute(
                 "UPDATE projects SET lead_ids = CAST(lead_id AS TEXT) WHERE lead_ids = ''"
+            )
+            await self.conn.commit()
+
+        if cols and "intro_message_id" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE projects ADD COLUMN intro_message_id INTEGER NOT NULL DEFAULT 0"
             )
             await self.conn.commit()
 
@@ -456,6 +463,25 @@ class Database:
         await self.conn.execute("DELETE FROM projects WHERE channel_id = ?", (channel_id,))
         await self.conn.execute(
             "DELETE FROM project_requests WHERE channel_id = ?", (channel_id,)
+        )
+        await self.conn.commit()
+
+    async def update_project_details(
+        self, channel_id: int, name: str, description: str, tags: str
+    ) -> None:
+        """Edit a project's editable fields in place (keeps role/leads/created_at)."""
+        await self.conn.execute(
+            "UPDATE projects SET name = ?, description = ?, tags = ? WHERE channel_id = ?",
+            (name, description, tags, channel_id),
+        )
+        await self.conn.commit()
+
+    async def set_intro_message(self, channel_id: int, message_id: int) -> None:
+        """Remember the id of the project channel's intro embed, so it can be
+        deleted and reposted when the project is edited."""
+        await self.conn.execute(
+            "UPDATE projects SET intro_message_id = ? WHERE channel_id = ?",
+            (message_id, channel_id),
         )
         await self.conn.commit()
 
