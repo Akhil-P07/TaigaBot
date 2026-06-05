@@ -18,6 +18,13 @@ def _get(name: str, default: str = "") -> str:
 # ── Discord ──────────────────────────────────────────────────────────────
 DISCORD_TOKEN: str = _get("DISCORD_TOKEN")
 GUILD_ID: int | None = int(_get("GUILD_ID")) if _get("GUILD_ID").isdigit() else None
+# Application (Client) ID — used to build the bot's invite link on the web page.
+# Find it in the Developer Portal → your app → General Information. Optional: the
+# bot falls back to its own user id once it's logged in.
+DISCORD_CLIENT_ID: str = _get("DISCORD_CLIENT_ID")
+# Public repo URL, shown as a "Build on GitHub" link on the landing page. Blank
+# hides it.
+GITHUB_URL: str = _get("GITHUB_URL")
 
 # ── Email / OTP ────────────────────────────────────────────────────────────
 # OTP emails are sent via Brevo's HTTP API (port 443), because hosts like

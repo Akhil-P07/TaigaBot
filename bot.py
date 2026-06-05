@@ -130,7 +130,7 @@ async def main() -> None:
     if not config.DISCORD_TOKEN:
         log.error("No DISCORD_TOKEN set. Copy .env.example to .env and fill it in.")
         return
-    await start_keep_alive()  # serves HTTP so free hosts (Replit) stay awake
+    await start_keep_alive(bot)  # serves the landing page + command docs + health
     async with bot:
         await bot.start(config.DISCORD_TOKEN)
 
