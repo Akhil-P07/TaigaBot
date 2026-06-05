@@ -455,7 +455,7 @@ def _setup_html() -> str:
     <header>
       {_taiga_html()}
       <h1>Setup Guide</h1>
-      <p class="tag">Everything an admin needs to get TaigaBot running in a server.</p>
+      <p class="tag">Add TaigaBot to your server, then run three quick steps.</p>
       <div class="actions">
         <a class="btn secondary" href="/">← Back to home</a>
         <a class="btn secondary" href="/commands">📖 Commands</a>
@@ -463,19 +463,10 @@ def _setup_html() -> str:
     </header>
     <div class="prose">
 
-      <h2>1. Invite the bot</h2>
-      <p>Use the <a href="/">invite button on the home page</a>. It already requests
-      every permission the bot needs: <strong>Manage Roles, Manage Channels, View
-      Channels, Use Application Commands, Kick Members, Ban Members, Moderate
-      Members, Manage Messages, Send Messages, Embed Links, Add Reactions, Read
-      Message History</strong>.</p>
-      <p>In the Discord Developer Portal → your app → <strong>Bot</strong>, enable both
-      privileged intents: <strong>Server Members Intent</strong> and <strong>Message
-      Content Intent</strong>.</p>
-      <div class="warn"><strong>Easy to miss:</strong> <strong>View Channels</strong>
-      and <strong>Use Application Commands</strong> are required. Discord only lets the
-      bot change a channel's visibility if it holds those permissions itself. Without
-      them, <code>/setup</code> fails to gate channels with "Missing Access".</div>
+      <h2>1. Invite TaigaBot</h2>
+      <p>Click the <a href="/">invite button on the home page</a> and pick your server
+      (you need the <strong>Manage Server</strong> permission there). The invite already
+      includes every permission the bot needs, so just accept the prompt.</p>
 
       <h2>2. Put TaigaBot's role at the top</h2>
       <p>In <strong>Server Settings → Roles</strong>, drag the <strong>TaigaBot</strong>
@@ -488,23 +479,7 @@ def _setup_html() -> str:
       role above TaigaBot is skipped and left untouched. This same rule is why kick,
       ban, timeout, and project roles fail if the bot sits too low.</div>
 
-      <h2>3. Set environment variables</h2>
-      <p>Copy <code>.env.example</code> to <code>.env</code> (or set these in your
-      host's Variables tab):</p>
-      <ul>
-        <li><code>DISCORD_TOKEN</code>:bot token (Developer Portal → Bot → Reset Token).</li>
-        <li><code>BREVO_API_KEY</code>:Brevo API key for sending OTP emails.</li>
-        <li><code>EMAIL_FROM</code>:your Brevo-verified sender address.</li>
-        <li><code>DISCORD_CLIENT_ID</code>:your Application ID (powers the invite button here).</li>
-        <li><code>GITHUB_URL</code>:repo link for the "Build on GitHub" link (optional).</li>
-        <li><code>GEMINI_API_KEY</code>:enables <code>/ask</code> (optional).</li>
-      </ul>
-      <p><strong>Email (Brevo):</strong> hosts like Railway and Render block outbound
-      SMTP, so OTP emails go over Brevo's HTTP API. Make a free Brevo account, verify a
-      sender under <strong>Senders &amp; IPs</strong> (no domain needed), and create a
-      key under <strong>SMTP &amp; API → API Keys</strong>.</p>
-
-      <h2>4. Run /setup once</h2>
+      <h2>3. Run /setup once</h2>
       <p>In Discord, the <strong>server owner or an administrator</strong> (not regular
       Eboard members) runs <code>/setup</code>. It is interactive: you can exclude
       categories/channels from gating and toggle the role reset, then it:</p>
@@ -527,10 +502,10 @@ def _setup_html() -> str:
           <strong>above</strong> the roles involved (and above everyone for the role
           reset). See step 2.</li>
         <li><strong>Commands fail with a permissions error even though permissions look
-          correct:</strong> the server has <strong>"Require 2FA for moderation"</strong>
-          on (Server Settings → Safety Setup) and the bot owner's Discord account lacks
-          2FA. Enable 2FA on the owner's account, or turn that requirement off. Discord
-          blocks Manage Roles/Channels, kick, ban, etc. otherwise.</li>
+          correct:</strong> your server has <strong>"Require 2FA for moderation"</strong>
+          on (Server Settings → Safety Setup), which blocks Manage Roles/Channels, kick,
+          ban, and more unless the bot's owner account has 2FA. Turn that requirement off
+          while running setup, or ask an admin who can.</li>
         <li><strong>"Missing Access" / "Couldn't edit" some channels during setup:</strong>
           those channels already deny <code>@everyone</code> view, so the bot can't see
           them to gate them. Grant TaigaBot <strong>View Channel</strong> on them, or run
@@ -540,17 +515,9 @@ def _setup_html() -> str:
           gating can't override a role that allows view. Use the <strong>role reset</strong>
           toggle in <code>/setup</code> (needs TaigaBot above everyone) so old roles are
           stripped until members re-verify.</li>
-        <li><strong>OTP emails aren't sending:</strong> confirm <code>BREVO_API_KEY</code>
-          is a v3 key (starts with <code>xkeysib-</code>) and <code>EMAIL_FROM</code>
-          exactly matches a Brevo-verified sender. SMTP-only setups won't work on most
-          hosts; that's why Brevo's HTTP API is used.</li>
-        <li><strong>Data resets after every redeploy (Railway/Render):</strong> the
-          container filesystem is ephemeral. Attach a persistent volume (e.g. mount
-          <code>/data</code>) and set <code>DB_PATH=/data/taigabot.db</code> so
-          verifications, XP, and projects survive deploys.</li>
-        <li><strong>Slash commands don't appear:</strong> global sync can take up to ~1
-          hour the first time. Set <code>GUILD_ID</code> to your server for instant
-          updates while testing.</li>
+        <li><strong>Slash commands don't appear right away:</strong> Discord can take up
+          to about an hour to show a bot's commands in a newly joined server the first
+          time. Give it a bit, then refresh Discord.</li>
       </ul>
 
     </div>
