@@ -25,8 +25,23 @@ class Personality(commands.Cog):
             return
         # Only react to a direct mention of the bot (not @everyone/@here).
         if self.bot.user in message.mentions and not message.mention_everyone:
-            if random.random() <= personality.MENTION_REPLY_CHANCE:
-                line = personality.say("mention", name=message.author.display_name)
+            lowered = message.content.lower()
+            asks_height = (
+                "height" in lowered or "how tall" in lowered or "how short" in lowered
+            )
+            # "Ryuji" → flusters and denies knowing him. Height → threatens to punch.
+            # Thanks → a thanks line. These always reply; a plain mention replies at
+            # the usual chance.
+            if "ryuji" in lowered:
+                situation, react = "ryuji", True
+            elif asks_height:
+                situation, react = "height", True
+            elif "thank" in lowered:
+                situation, react = "thanks", True
+            else:
+                situation, react = "mention", random.random() <= personality.MENTION_REPLY_CHANCE
+            if react:
+                line = personality.say(situation, name=message.author.display_name)
                 if line:
                     try:
                         await message.reply(line, mention_author=False)

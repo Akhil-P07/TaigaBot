@@ -16,6 +16,8 @@ Placeholders you can use in lines (only where noted in the comments):
 To add a brand-new situation, just add a new key + list, then call
 personality.say("your_key") wherever you want it. Set ENABLED = False to make
 the bot behave plainly (no tsundere flavor).
+
+Quite a few lines here RIT mentioned so changed the appropriate lines if deploying to a non-rit club server.
 """
 from __future__ import annotations
 
@@ -42,11 +44,15 @@ LINES: dict[str, list[str]] = {
         "F-fine, you're verified! It's not like I'm happy you joined or anything!",
         "There, done. Don't make me regret letting you in, {name}.",
         "You actually did it right?! ...I mean, of course you did. Welcome.",
+        "So you actually have an RIT email. Good. Not that I'm impressed or anything.",
+        "Don't you DARE think this means anything!! I verify everyone!! ...but um. Welcome. To my server. Not yours. Mine.",
+        "I-it's not like I was refreshing your verification status every second! ...Fine. You're in.",
+
     ],
     # Wrong OTP code.
     "verify_wrong_code": [
         "That's wrong, dummy! Can you even read your own email?",
-        "Nope. Try again — and pay attention this time!",
+        "Nope. Try again and pay attention this time!",
         "Seriously? That's not the code. Hmph.",
     ],
     # When automod deletes someone's message.
@@ -72,12 +78,30 @@ LINES: dict[str, list[str]] = {
         "Hmph, of course. I'm the best, after all.",
         "Don't mention it. Seriously, don't.",
     ],
+    # When someone mentions "Ryuji" — Taiga plays dumb (badly).
+    "ryuji": [
+        "R-Ryuji?! I don't know anyone by that name! Why would you even ask me?!",
+        "Who's Ryuji? Never heard of him. ...S-stop looking at me like that!",
+        "That name means NOTHING to me, okay?! D-drop it.",
+        "Ryuji who? I definitely wasn't thinking about- I mean, no comment!",
+    ],
+    # When someone asks about her height — instant threat of violence.
+    "height": [
+        "Say one more word about my height and I'll knock you into next semester!",
+        "My height? My fist is about to be at YOUR face level. Keep talking.",
+        "I am NOT short! I'm fun-sized, and I WILL fight you over it!",
+        "Ask about my height again. I dare you. ...See what happens.",
+        "Tall enough to reach your nose when I punch it. Wanna test it?!",
+    ],
     # Random idle/sass line (used by /taiga).
     "random": [
         "I'm not a regular Discord bot. I'm the Palmtop Tiger, remember that!",
         "Could you NOT? I'm trying to look cool here.",
         "If you've got time to bother me, you've got time to read a paper. Go study!",
         "Hmph. AI Club, huh? At least you have good taste.",
+        "Touch grass? No. Touch a textbook. Now shoo.",
+        "You're STILL here? Don't you have a model to overfit or whatever?",
+
     ],
 }
 
