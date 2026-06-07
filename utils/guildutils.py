@@ -65,6 +65,22 @@ async def promote_to_verified(member: discord.Member) -> bool:
         return False
 
 
+async def demote_to_unverified(member: discord.Member, reason: str = "TaigaBot: unverified") -> bool:
+    """Inverse of promote_to_verified: strip the Verified role and (re)apply
+    Unverified. Used when a member's verification is removed or transferred away.
+    Returns False if the bot lacks permission (its role is too low)."""
+    verified = verified_role(member.guild)
+    unverified = unverified_role(member.guild)
+    try:
+        if verified and verified in member.roles:
+            await member.remove_roles(verified, reason=reason)
+        if unverified and unverified not in member.roles:
+            await member.add_roles(unverified, reason=reason)
+        return True
+    except discord.Forbidden:
+        return False
+
+
 async def log_mod_action(guild: discord.Guild, embed: discord.Embed) -> None:
     """Post an embed to the mod-log channel if it exists."""
     ch = modlog_channel(guild)

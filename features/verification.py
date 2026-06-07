@@ -32,6 +32,10 @@ from utils.emailer import EmailError, send_otp_email
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+)$")
 
+# Account recovery: how long a RIT identity must wait between transfers, so
+# accounts can't be shuffled rapidly (durable — stored on the record).
+RECOVERY_COOLDOWN_DAYS = 7
+
 
 @dataclass
 class PendingVerification:
@@ -41,6 +45,7 @@ class PendingVerification:
     guild_id: int
     created_at: float
     attempts: int = 0
+    recovery: bool = False  # True = transfer an existing record to this new account
 
 
 def _valid_domain(email: str) -> bool:
@@ -174,6 +179,86 @@ class Verification(commands.Cog):
         )
 
     @app_commands.command(
+        name="recover",
+        description="Lost your old Discord? Recover your verification on this account with your RIT email.",
+    )
+    @app_commands.describe(email="The RIT email you originally verified with")
+    @app_commands.checks.cooldown(1, 60.0)  # 1 /recover per 60s per user (anti email-spam)
+    async def recover(self, interaction: discord.Interaction, email: str):
+        member = interaction.user
+        email = email.strip().lower()
+
+        # Already verified on THIS account — nothing to recover.
+        if await self.bot.db.user_is_verified(member.id):
+            await interaction.response.send_message(
+                "✅ This account is already verified — nothing to recover.", ephemeral=True
+            )
+            return
+
+        if not _valid_domain(email):
+            allowed = " or ".join(f"`@{d}`" for d in config.ALLOWED_EMAIL_DOMAINS)
+            await interaction.response.send_message(
+                f"❌ That doesn't look like a valid university email. Use {allowed}.",
+                ephemeral=True,
+            )
+            return
+
+        sid = _student_id(email)
+
+        # Must already be registered to recover; otherwise it's a normal /verify.
+        if not await self.bot.db.student_id_is_registered(sid):
+            await interaction.response.send_message(
+                "❌ That RIT email isn't linked to any account yet — use `/verify` to "
+                "verify normally.",
+                ephemeral=True,
+            )
+            return
+
+        # Rate limit: one transfer per RIT identity per RECOVERY_COOLDOWN_DAYS, so
+        # accounts can't be shuffled rapidly.
+        last = await self.bot.db.last_recovery_at_for(sid)
+        window = RECOVERY_COOLDOWN_DAYS * 86400
+        if last and time.time() - last < window:
+            days_left = max(1, int((window - (time.time() - last)) // 86400) + 1)
+            await interaction.response.send_message(
+                f"⏳ That RIT account was recovered recently. Try again in about "
+                f"{days_left} day(s), or ask an Eboard member for help.",
+                ephemeral=True,
+            )
+            return
+
+        # Someone else already mid-verification/recovery for this account?
+        conflict = self._live_pending_by_others(sid, member.id)
+        if conflict is not None:
+            await interaction.response.send_message(
+                "❌ Someone is already verifying that RIT account right now. Try again "
+                "shortly.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        code = f"{random.randint(0, 999999):06d}"
+        try:
+            guild_name = interaction.guild.name if interaction.guild else "TaigaBot"
+            await asyncio.to_thread(send_otp_email, email, code, member.display_name, guild_name)
+        except EmailError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+
+        self.pending[member.id] = PendingVerification(
+            code=code, email=email, real_name="", guild_id=interaction.guild_id,
+            created_at=time.time(), recovery=True,
+        )
+        await interaction.followup.send(
+            f"📧 To move your verification here, I emailed a 6-digit code to **{email}**.\n"
+            f"Run `/confirm code:XXXXXX` within {config.OTP_TTL_MINUTES} minutes. This "
+            f"transfers your verification to **this** account and removes the Verified role "
+            f"from your old one across every server.\n*(Check spam/junk.)*",
+            ephemeral=True,
+        )
+
+    @app_commands.command(
         name="confirm", description="Enter the 6-digit code from your verification email."
     )
     @app_commands.describe(code="The 6-digit code sent to your email")
@@ -208,6 +293,58 @@ class Verification(commands.Cog):
             sass = personality.say("verify_wrong_code")
             await interaction.response.send_message(
                 f"❌ Wrong code. {remaining} attempt(s) left." + (f"\n*{sass}*" if sass else ""),
+                ephemeral=True,
+            )
+            return
+
+        # ── Account recovery: move the record here, then auto-strip the OLD
+        #    account's Verified role across every server (no Eboard action) ──
+        if p.recovery:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            sid = _student_id(p.email)
+            old_id = await self.bot.db.verified_discord_id_for(sid)
+            moved = await self.bot.db.transfer_verification(
+                sid, member.id, str(member), p.guild_id
+            )
+            del self.pending[member.id]
+            if not moved:
+                await interaction.followup.send(
+                    "❌ Couldn't find a verification to recover — it may have been "
+                    "removed. Try `/verify` instead.",
+                    ephemeral=True,
+                )
+                return
+
+            # Automatically remove the old account's Verified role in EVERY server
+            # the bot is in (and re-gate it as Unverified).
+            revoked = 0
+            if old_id and old_id != member.id:
+                for g in self.bot.guilds:
+                    old_member = g.get_member(old_id)
+                    if old_member and await gu.demote_to_unverified(
+                        old_member,
+                        reason="TaigaBot: verification transferred to a new account",
+                    ):
+                        revoked += 1
+
+            # Grant Verified on the new account in this server.
+            await gu.promote_to_verified(member)
+
+            # Audit trail for Eboard.
+            embed = discord.Embed(
+                title="♻️ Account recovery",
+                description=(
+                    f"Verification transferred to {member.mention} (`{member.id}`).\n"
+                    f"Old account `{old_id}` had its Verified role removed across "
+                    f"**{revoked}** server(s)."
+                ),
+                color=config.BOT_COLOR,
+            )
+            await gu.log_mod_action(guild, embed)
+
+            await interaction.followup.send(
+                "✅ Recovered! Your verification now lives on **this** account, and your "
+                "old account's Verified role has been removed everywhere. Welcome back!",
                 ephemeral=True,
             )
             return

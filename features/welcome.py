@@ -30,6 +30,8 @@ def onboarding_embed(guild_name: str) -> discord.Embed:
             "2️⃣ Check your email for a 6-digit code, then run `/confirm code:XXXXXX`\n\n"
             f"Your email must be {allowed}. Until you verify, you can only chat in "
             f"**#{config.UNVERIFIED_CHANNEL_NAME}**.\n\n"
+            "**Lost your old Discord account?** Run `/recover email:you@rit.edu` "
+            "instead — it moves your verification to this account.\n\n"
             "Once verified, the whole server unlocks. See you inside! 🚀"
         ),
         color=config.BOT_COLOR,

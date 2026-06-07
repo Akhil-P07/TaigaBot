@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS verified_users (
     real_name        TEXT    NOT NULL,
     email            TEXT    NOT NULL UNIQUE,
     guild_id         INTEGER NOT NULL,
-    verified_at      INTEGER NOT NULL
+    verified_at      INTEGER NOT NULL,
+    last_recovery_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -133,6 +134,15 @@ class Database:
         if cols and "intro_message_id" not in cols:
             await self.conn.execute(
                 "ALTER TABLE projects ADD COLUMN intro_message_id INTEGER NOT NULL DEFAULT 0"
+            )
+            await self.conn.commit()
+
+        # Account-recovery rate limit marker (added later).
+        cur = await self.conn.execute("PRAGMA table_info(verified_users)")
+        vcols = {r[1] for r in await cur.fetchall()}
+        if vcols and "last_recovery_at" not in vcols:
+            await self.conn.execute(
+                "ALTER TABLE verified_users ADD COLUMN last_recovery_at INTEGER NOT NULL DEFAULT 0"
             )
             await self.conn.commit()
 
@@ -277,6 +287,47 @@ class Database:
             "DELETE FROM verified_users WHERE discord_id = ?", (discord_id,)
         )
         await self.conn.commit()
+
+    async def verified_discord_id_for(self, student_id: str) -> int | None:
+        """The Discord ID currently linked to this RIT student id (local part of the
+        email), or None. Used to find the OLD account during recovery."""
+        cur = await self.conn.execute(
+            "SELECT discord_id FROM verified_users "
+            "WHERE lower(substr(email, 1, instr(email, '@') - 1)) = ?",
+            (student_id.lower(),),
+        )
+        row = await cur.fetchone()
+        return row["discord_id"] if row else None
+
+    async def last_recovery_at_for(self, student_id: str) -> int:
+        """When this RIT identity was last transferred to a new account (0 if never).
+        Drives the recovery rate limit so accounts can't be shuffled rapidly."""
+        cur = await self.conn.execute(
+            "SELECT last_recovery_at FROM verified_users "
+            "WHERE lower(substr(email, 1, instr(email, '@') - 1)) = ?",
+            (student_id.lower(),),
+        )
+        row = await cur.fetchone()
+        return (row["last_recovery_at"] or 0) if row else 0
+
+    async def transfer_verification(
+        self, student_id: str, new_discord_id: int, new_username: str, guild_id: int
+    ) -> bool:
+        """Re-point an existing verified record (matched by RIT student id, i.e. the
+        local part before '@', so both domains count) to a NEW Discord account.
+
+        Used for account recovery when someone loses their old Discord. A single
+        UPDATE — the old discord_id row becomes the new account's; stamps
+        last_recovery_at for the rate limit. Returns True if a record was moved."""
+        now = int(time.time())
+        cur = await self.conn.execute(
+            "UPDATE verified_users SET discord_id = ?, discord_username = ?, "
+            "guild_id = ?, verified_at = ?, last_recovery_at = ? "
+            "WHERE lower(substr(email, 1, instr(email, '@') - 1)) = ?",
+            (new_discord_id, new_username, guild_id, now, now, student_id.lower()),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
 
     async def count_verified(self, guild_id: int) -> int:
         cur = await self.conn.execute(

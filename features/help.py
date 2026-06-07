@@ -45,6 +45,7 @@ class Help(commands.Cog):
             value=(
                 "`/verify name email` — start verifying with your RIT email\n"
                 "`/confirm code` — finish with the 6-digit code\n"
+                "`/recover email` — moved Discord accounts? move your verification here\n"
                 "`/verifyhelp` — how verification works"
             ),
             inline=False,

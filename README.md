@@ -27,7 +27,7 @@ everywhere) and their verification status (see the verification note below).
 | Feature | File | Commands |
 |---|---|---|
 | **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
-| **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/whois` (Eboard), `/unverify` (Eboard) |
+| **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard), `/unverify` (Eboard) |
 | **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
@@ -152,6 +152,14 @@ One RIT account = one membership: `jdoe@rit.edu` and `jdoe@g.rit.edu` are treate
 as the same person (matched on the part before the `@`). A member who verified on
 one server the bot is in is auto-granted `Verified` when joining another — no
 re-verification needed. Eboard can `/whois @member` or `/unverify @member`.
+
+**Lost your Discord account?** Run `/recover email:<your RIT email>` on the new
+account and confirm the emailed code. This **moves** your verification to the new
+account and **automatically removes the Verified role from the old account across
+every server** — no Eboard action needed. It's a *move*, not a copy, so only one
+account per RIT email is ever verified (no alt stacking), and it's rate-limited to
+once per identity per **7 days** (`RECOVERY_COOLDOWN_DAYS`) and logged to
+`#mod-log`.
 
 > **Multi-guild note:** verification settings are *global* — the allowed email
 > domains and the sending address come from `.env` and apply to every server the
