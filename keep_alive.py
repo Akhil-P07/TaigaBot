@@ -459,7 +459,8 @@ def _landing_html(bot) -> str:
         students-only. Verify once, recognized across every server running the bot,
         and recover your status on a new account with <code>/recover</code>.</p></div>
       <div class="card"><h3>🛡️ Moderation</h3><p>Automod with spam auto-warns, plus
-        kick / ban / timeout / warn tools for your Eboard.</p></div>
+        kick / ban / timeout / warn tools for your Eboard, and an anonymous
+        cross-server repeat-offender check (a count only, no names).</p></div>
       <div class="card"><h3>📊 Leveling</h3><p>Members earn XP for chatting, with
         <code>/rank</code> and a global leaderboard.</p></div>
       <div class="card"><h3>🗂️ Projects</h3><p>Spin up gated project channels with
