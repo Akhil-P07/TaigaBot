@@ -391,7 +391,7 @@ a { color: var(--accent); }
 
 
 def _page(title: str, body: str) -> str:
-    icon = _club_logo_src() or _taiga_src()
+    icon = _taiga_src() or _club_logo_src()
     favicon = f'<link rel="icon" href="{icon}">' if icon else ""
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
