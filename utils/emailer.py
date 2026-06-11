@@ -14,6 +14,7 @@ verification feature uses `asyncio.to_thread`).
 """
 from __future__ import annotations
 
+import html
 import json
 import urllib.error
 import urllib.request
@@ -29,6 +30,11 @@ class EmailError(Exception):
 
 
 def _html_body(code: str, discord_name: str, guild_name: str) -> str:
+    # Escape user-controlled values (Discord display name, guild name) so they
+    # can't inject HTML/links into the email — important for the recovery flow,
+    # where the email is delivered to the existing account owner's inbox.
+    discord_name = html.escape(discord_name)
+    guild_name = html.escape(guild_name)
     return f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto;">
           <h2 style="color:#E8552D;">{guild_name} — Verification</h2>

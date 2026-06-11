@@ -37,7 +37,7 @@ from discord.ext import commands
 
 import config
 from utils import guildutils as gu
-from utils.checks import is_eboard
+from utils.checks import is_eboard, member_has_role
 
 NEW_CATEGORY_SENTINEL = "__new__"
 
@@ -179,11 +179,27 @@ async def _handle_decision(
         )
         return
 
-    status = "approved" if approved else "denied"
-    await db.update_request_status(request_id, status)
-
     guild = interaction.client.get_guild(req["guild_id"])
     project = await db.get_project(req["channel_id"]) if guild else None
+
+    # Authorization: only a CURRENT project lead (or an admin/Eboard) may decide.
+    # The buttons live in a lead's DM, but don't rely on that alone — verify the
+    # clicker is still authorized (e.g. a former lead could retain the DM).
+    is_lead = project is not None and interaction.user.id in _parse_leads(project)
+    member = guild.get_member(interaction.user.id) if guild else None
+    is_staff = member is not None and (
+        member.guild_permissions.administrator
+        or member_has_role(member, config.EBOARD_ROLE_NAME)
+    )
+    if not (is_lead or is_staff):
+        await interaction.response.send_message(
+            "⛔ Only a current lead of this project can decide this request.",
+            ephemeral=True,
+        )
+        return
+
+    status = "approved" if approved else "denied"
+    await db.update_request_status(request_id, status)
 
     project_name = project["name"] if project else f"channel {req['channel_id']}"
 

@@ -34,6 +34,11 @@ MAX_MENTIONS = 10  # delete messages with MORE than this many user+role pings (m
 SPAM_WINDOW_SEC = 7
 SPAM_THRESHOLD = 5  # messages within window
 CAPS_MIN_LEN = 12
+# Cross-channel duplicate spam: the SAME message posted in this many DISTINCT
+# channels within the window is flagged (catches low-rate cross-posting that the
+# message-rate check above misses).
+CROSSPOST_CHANNELS = 3
+CROSSPOST_WINDOW_SEC = 20
 
 # Auto-warn on spam: record a warning (by the bot). Rate-limited per user so one
 # burst — or a persistent spammer — can't flood the warning log.
@@ -50,6 +55,9 @@ class Moderation(commands.Cog):
         self.bot = bot
         # (guild_id, user_id) -> recent message timestamps
         self._recent: dict[tuple[int, int], deque] = defaultdict(lambda: deque(maxlen=SPAM_THRESHOLD))
+        # (guild_id, user_id) -> recent (ts, channel_id, content_key, message) for
+        # the cross-channel duplicate-content check.
+        self._recent_posts: dict[tuple[int, int], deque] = defaultdict(lambda: deque(maxlen=25))
         # (guild_id, user_id) -> last auto-warn timestamp (anti-flood)
         self._last_autowarn: dict[tuple[int, int], float] = {}
         # (guild_id, user_id) -> count of auto-warns this session (drives the
@@ -132,10 +140,30 @@ class Moderation(commands.Cog):
                 await punish("please don't type in all caps.")
                 return
 
-        # spam (rapid messages)
+        # spam
         if settings["filter_spam"]:
             key = (message.guild.id, message.author.id)
             now = time.time()
+
+            # (a) cross-channel duplicate content: the SAME message in several
+            # DISTINCT channels within the window (catches slow cross-posting).
+            content_key = content.strip().lower()
+            if content_key:
+                posts = self._recent_posts[key]
+                posts.append((now, message.channel.id, content_key, message))
+                while posts and now - posts[0][0] > CROSSPOST_WINDOW_SEC:
+                    posts.popleft()
+                dupes = [p for p in posts if p[2] == content_key]
+                if len({p[1] for p in dupes}) >= CROSSPOST_CHANNELS:
+                    burst = [p[3] for p in dupes]
+                    posts.clear()
+                    await self._bulk_delete(message.channel, burst)
+                    await announce("please don't post the same message across channels.")
+                    if AUTOWARN_SPAM:
+                        await self._autowarn_spam(message)
+                    return
+
+            # (b) rapid messages (any content) within the short window.
             dq = self._recent[key]
             dq.append((now, message))
             if len(dq) == SPAM_THRESHOLD and (now - dq[0][0]) < SPAM_WINDOW_SEC:

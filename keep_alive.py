@@ -46,11 +46,14 @@ _last_prune = 0.0
 
 
 def _client_ip(request: web.Request) -> str:
-    """Real client IP. Behind Railway's proxy the peer is the proxy, so prefer the
-    first X-Forwarded-For entry (the original client)."""
+    """Real client IP for rate-limiting. Behind a single trusted proxy
+    (Railway/Caddy) the peer is the proxy, which APPENDS the real client IP as the
+    LAST X-Forwarded-For hop. The leftmost entries are client-supplied and
+    spoofable, so use the last hop — otherwise an attacker could forge XFF to
+    dodge the per-IP limit."""
     xff = request.headers.get("X-Forwarded-For")
     if xff:
-        return xff.split(",")[0].strip()
+        return xff.split(",")[-1].strip()
     return request.remote or "unknown"
 
 

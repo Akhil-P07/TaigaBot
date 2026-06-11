@@ -1,4 +1,7 @@
-discord.py>=2.4.0
-aiosqlite>=0.20.0
-python-dotenv>=1.0.0
-aiohttp>=3.9.0
+# Pinned for reproducible builds + supply-chain safety. Bump deliberately after
+# reviewing release notes (don't use unpinned >= ranges — a redeploy would auto-
+# pull a future, possibly compromised, release).
+discord.py==2.7.1
+aiosqlite==0.22.1
+python-dotenv==1.2.2
+aiohttp==3.14.0
