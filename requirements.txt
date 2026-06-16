@@ -5,3 +5,8 @@ discord.py==2.7.1
 aiosqlite==0.22.1
 python-dotenv==1.2.2
 aiohttp==3.14.0
+
+# Phishing/scam automod filter (utils/phishing.py) adds NO runtime dependency:
+# the model is a small JSON of token weights scored in pure Python. Retraining
+# (dataset/train_phishing_model.py) is also stdlib-only — no ML packages needed,
+# which keeps memory well within a 500 MB Railway instance.

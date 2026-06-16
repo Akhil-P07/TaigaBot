@@ -6,6 +6,10 @@
 *.db-journal
 *.sqlite3
 
+# Phishing trainer cache (re-downloaded on demand; the trained model
+# dataset/phishing_model.json IS committed and must NOT be ignored)
+dataset/discord-phishing-scam-detection.csv
+
 # Claude / editor
 .claude/
 .vscode/

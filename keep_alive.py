@@ -461,7 +461,8 @@ def _landing_html(bot) -> str:
       <div class="card"><h3>✅ Verification</h3><p>RIT-email OTP keeps your server
         students-only. Verify once, recognized across every server running the bot,
         and recover your status on a new account with <code>/recover</code>.</p></div>
-      <div class="card"><h3>🛡️ Moderation</h3><p>Automod with spam auto-warns, plus
+      <div class="card"><h3>🛡️ Moderation</h3><p>Automod with spam auto-warns and an
+        on-device ML <strong>phishing/scam filter</strong>, plus
         kick / ban / timeout / warn tools for your Eboard, and an anonymous
         cross-server repeat-offender check (a count only, no names).</p></div>
       <div class="card"><h3>📊 Leveling</h3><p>Members earn XP for chatting, with

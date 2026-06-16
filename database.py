@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     filter_spam      INTEGER NOT NULL DEFAULT 1,
     filter_mentions  INTEGER NOT NULL DEFAULT 1,
     filter_caps      INTEGER NOT NULL DEFAULT 0,
+    filter_phishing  INTEGER NOT NULL DEFAULT 1,
     levels_enabled   INTEGER NOT NULL DEFAULT 1
 );
 
@@ -101,6 +102,7 @@ DEFAULT_SETTINGS = {
     "filter_spam": 1,
     "filter_mentions": 1,
     "filter_caps": 0,
+    "filter_phishing": 1,
     "levels_enabled": 1,
 }
 
@@ -134,6 +136,15 @@ class Database:
         if cols and "intro_message_id" not in cols:
             await self.conn.execute(
                 "ALTER TABLE projects ADD COLUMN intro_message_id INTEGER NOT NULL DEFAULT 0"
+            )
+            await self.conn.commit()
+
+        # Phishing/scam automod filter toggle (added later).
+        cur = await self.conn.execute("PRAGMA table_info(guild_settings)")
+        gcols = {r[1] for r in await cur.fetchall()}
+        if gcols and "filter_phishing" not in gcols:
+            await self.conn.execute(
+                "ALTER TABLE guild_settings ADD COLUMN filter_phishing INTEGER NOT NULL DEFAULT 1"
             )
             await self.conn.commit()
 

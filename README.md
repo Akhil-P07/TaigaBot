@@ -28,7 +28,7 @@ everywhere) and their verification status (see the verification note below).
 |---|---|---|
 | **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard), `/unverify` (Eboard) |
-| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword`, `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
+| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, **phishing**), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
@@ -211,6 +211,37 @@ credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
 
 ---
 
+## Phishing / scam detection
+
+The `phishing` automod filter catches scam messages — fake Nitro/Steam gifts,
+"free giveaway" link drops, malware `.exe`s — that a static word list misses. It
+uses a small **machine-learning model trained offline** on the
+[`wangyuancheng/discord-phishing-scam-clean`](https://huggingface.co/datasets/wangyuancheng/discord-phishing-scam-clean)
+dataset (1,830 labelled Discord messages).
+
+- **Runs on-device, cheap.** The trained model ships as a ~55 KB JSON of token
+  weights ([`dataset/phishing_model.json`](dataset/phishing_model.json)). At
+  runtime the bot just tokenises the message and sums weights — **pure Python, no
+  extra dependencies, well under a megabyte of RAM**, so it's happy on a 500 MB
+  Railway instance. **No message data ever leaves the bot.**
+- **Tuned for precision** (~0.94 on held-out data) so real members' messages
+  aren't deleted; it accepts missing some scams over false positives. On a hit it
+  deletes the message, auto-warns the user, and alerts the Eboard.
+- **Toggle it** like any filter: `/automod disable phishing` /
+  `/automod enable phishing` (on by default). If the model file is missing the
+  filter silently no-ops and `/automod status` shows a ⚠️ marker.
+- **Retrain / refresh** any time (no third-party packages needed):
+
+  ```bash
+  python dataset/train_phishing_model.py
+  ```
+
+  It re-downloads the dataset, retrains, prints held-out precision/recall, and
+  rewrites the JSON. The shared tokenizer lives in
+  [`utils/phishing.py`](utils/phishing.py) so training and runtime never drift.
+
+---
+
 ## Customizing
 
 - **Tsundere lines** — [`personality.py`](personality.py); set `ENABLED = False`
@@ -222,6 +253,9 @@ credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
   Caught spammers are auto-warned; the Eboard is DMed only once a user hits
   `SPAM_WARN_ESCALATE` total warnings (and each multiple after), so their DMs
   aren't flooded.
+- **Phishing/scam filter** — see [Phishing / scam detection](#phishing--scam-detection)
+  above; retrain with `python dataset/train_phishing_model.py`, tune
+  `TARGET_PRECISION` in that script to trade recall for precision.
 - **Resources & AI terms** — `RESOURCES` / `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
 - **XP tuning** — top of [`features/leveling.py`](features/leveling.py).

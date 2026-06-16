@@ -115,8 +115,10 @@ class Help(commands.Cog):
                 name="🤖 Auto-moderation (🛡️ Eboard)",
                 value=(
                     "`/automod enable|disable [filter]` — toggle automod or one filter\n"
+                    "  *filters:* `words` `invites` `spam` `mentions` `caps` `phishing`\n"
                     "`/automod status` — show current settings\n"
-                    "`/automod addword|removeword word` — manage banned words"
+                    "`/automod addword|removeword word` — manage banned words\n"
+                    "🛡️ *Phishing/scam detection uses an on-device ML model — no data leaves the bot.*"
                 ),
                 inline=False,
             )

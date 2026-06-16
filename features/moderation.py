@@ -7,6 +7,9 @@ Automod (toggle each filter on/off with /automod):
                       offender, and DMs the Eboard
   • filter_mentions — deletes messages with too many user mentions
   • filter_caps     — deletes very long ALL-CAPS messages (off by default)
+  • filter_phishing — deletes suspected phishing/scam messages using a small
+                      ML model (trained offline; see utils/phishing.py), then
+                      auto-warns the offender and alerts the Eboard
 
 Moderation commands (Eboard role only): /kick /ban /timeout /warn /warnings
 /clearwarnings /purge. Every command checks the caller's role via is_eboard().
@@ -26,6 +29,7 @@ import config
 import personality
 from utils import guildutils as gu
 from utils.checks import is_eboard, member_has_role
+from utils.phishing import MODEL as PHISHING_MODEL
 
 log = logging.getLogger("taigabot.automod")
 
@@ -120,6 +124,22 @@ class Moderation(commands.Cog):
             await punish("posting invite links isn't allowed here.")
             return
 
+        # phishing / scam — a small ML model (trained offline on a Discord
+        # phishing dataset; see utils/phishing.py) scores the message. Tuned for
+        # precision so legit chatter isn't deleted. Escalates to the Eboard on
+        # every hit (scams are rarer and more serious than rate-spam).
+        if settings["filter_phishing"] and PHISHING_MODEL is not None and content.strip():
+            if PHISHING_MODEL.is_phishing(content):
+                await punish("that message looks like a phishing or scam link.")
+                if AUTOWARN_SPAM:
+                    await self._autowarn(
+                        message,
+                        reason="Automod: suspected phishing/scam message",
+                        label="posting a suspected phishing/scam message",
+                        escalate_every=1,
+                    )
+                return
+
         # mass mentions — guards against mention bombing. Covers @everyone/@here
         # (not counted in message.mentions) and too many pings. Uses raw_* counts,
         # which include REPEATS of the same user/role (message.mentions dedupes,
@@ -160,7 +180,11 @@ class Moderation(commands.Cog):
                     await self._bulk_delete(message.channel, burst)
                     await announce("please don't post the same message across channels.")
                     if AUTOWARN_SPAM:
-                        await self._autowarn_spam(message)
+                        await self._autowarn(
+                            message,
+                            reason="Automod: spamming (too many messages too fast)",
+                            label="spamming",
+                        )
                     return
 
             # (b) rapid messages (any content) within the short window.
@@ -173,7 +197,11 @@ class Moderation(commands.Cog):
                 await self._bulk_delete(message.channel, burst)
                 await announce("you're sending messages too fast — slow down.")
                 if AUTOWARN_SPAM:
-                    await self._autowarn_spam(message)
+                    await self._autowarn(
+                        message,
+                        reason="Automod: spamming (too many messages too fast)",
+                        label="spamming",
+                    )
                 return
 
     # ── automod config (Eboard) ───────────────────────────────────────────
@@ -188,6 +216,7 @@ class Moderation(commands.Cog):
         "spam": "filter_spam",
         "mentions": "filter_mentions",
         "caps": "filter_caps",
+        "phishing": "filter_phishing",
     }
 
     @automod.command(name="enable", description="Enable automod, or one specific filter.")
@@ -236,6 +265,10 @@ class Moderation(commands.Cog):
         embed.add_field(name="Spam", value=onoff(s["filter_spam"]))
         embed.add_field(name="Mass mentions", value=onoff(s["filter_mentions"]))
         embed.add_field(name="All-caps", value=onoff(s["filter_caps"]))
+        phishing_state = onoff(s["filter_phishing"])
+        if PHISHING_MODEL is None:
+            phishing_state += " ⚠️ *(model not loaded)*"
+        embed.add_field(name="Phishing/scam", value=phishing_state)
         embed.add_field(
             name=f"Banned word list ({len(words)})",
             value=", ".join(f"`{w}`" for w in words) if words else "*(empty)*",
@@ -455,18 +488,25 @@ class Moderation(commands.Cog):
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"🧹 Deleted {len(deleted)} message(s).", ephemeral=True)
 
-    async def _autowarn_spam(self, message: discord.Message) -> None:
-        """Record an automatic warning for spamming and DM the Eboard.
+    async def _autowarn(
+        self, message: discord.Message, *, reason: str, label: str,
+        escalate_every: int = SPAM_WARN_ESCALATE,
+    ) -> None:
+        """Record an automatic automod warning and (on a schedule) DM the Eboard.
+
+        `reason` is the text stored on the warning; `label` is the human phrase
+        used in the offender's DM and the Eboard alert (e.g. "spamming" or
+        "posting a suspected phishing/scam message").
 
         The warning is attributed to the bot itself (moderator_id = bot id), so it
         shows up in /warnings alongside manual ones. Rate-limited per user via
-        AUTOWARN_COOLDOWN_SEC so a single burst (or a persistent spammer) doesn't
+        AUTOWARN_COOLDOWN_SEC so a single burst (or a persistent offender) doesn't
         rack up dozens of warnings — the message is still deleted every time by
         punish(), only the warning is throttled.
 
-        The Eboard is NOT DMed on every warning. They're notified only once a user
-        reaches SPAM_WARN_ESCALATE total warnings (and every that-many afterwards),
-        so a single repeat offender can never flood their DMs.
+        The Eboard is DMed every `escalate_every` auto-warns for this user, so a
+        single repeat offender can never flood their DMs. Spam uses the default
+        (every Nth); phishing passes 1 so the Eboard hears about every scam.
         """
         guild = message.guild
         member = message.author
@@ -476,7 +516,6 @@ class Moderation(commands.Cog):
             return
         self._last_autowarn[key] = now
 
-        reason = "Automod: spamming (too many messages too fast)"
         await self.bot.db.add_warning(guild.id, member.id, self.bot.user.id, reason)
         total = len(await self.bot.db.get_warnings(guild.id, member.id))
         # Count auto-warns ourselves so the "every Nth" escalation is reliable —
@@ -493,15 +532,15 @@ class Moderation(commands.Cog):
         # the recorded warning still happen regardless).
         try:
             await member.send(
-                f"⚠️ You were automatically warned in **{guild.name}** for spamming. "
-                f"You now have **{total}** warning(s) on record. Please slow down."
+                f"⚠️ You were automatically warned in **{guild.name}** for {label}. "
+                f"You now have **{total}** warning(s) on record."
             )
         except discord.HTTPException:
             pass
 
-        # Escalate to the Eboard every SPAM_WARN_ESCALATE auto-warns (3rd, 6th, …)
-        # so they're notified about a repeat offender without being flooded.
-        if streak % SPAM_WARN_ESCALATE != 0:
+        # Escalate to the Eboard every `escalate_every` auto-warns so they're
+        # notified about a repeat offender without being flooded.
+        if streak % escalate_every != 0:
             return
 
         other_servers, other_warns = await self.bot.db.cross_server_warnings(
@@ -513,7 +552,7 @@ class Moderation(commands.Cog):
             if other_servers else ""
         )
         embed = discord.Embed(
-            title="⚠️ Repeat spammer — auto-warn",
+            title="⚠️ Automod auto-warn",
             description=(
                 f"**User:** {member.mention} ({member} `{member.id}`)\n"
                 f"**Channel:** {message.channel.mention}\n"
@@ -526,7 +565,7 @@ class Moderation(commands.Cog):
         embed.set_footer(text=f"{guild.name} • automod")
         reached = await self._dm_eboard(guild, embed)
         log.info(
-            "Escalated repeat spammer %s to Eboard: DMed %d member(s)%s.",
+            "Escalated repeat offender %s to Eboard: DMed %d member(s)%s.",
             member, reached,
             "" if reached else " (none reached — Eboard DMs closed or role empty)",
         )
