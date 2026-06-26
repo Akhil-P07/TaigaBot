@@ -100,7 +100,6 @@ LINES: dict[str, list[str]] = {
         "I'm not a regular Discord bot. I'm the Palmtop Tiger, remember that!",
         "Could you NOT? I'm trying to look cool here.",
         "If you've got time to bother me, you've got time to read a paper. Go study!",
-        "Hmph. AI Club, huh? At least you have good taste.",
         "Touch grass? No. Touch a textbook. Now shoo.",
         "You're STILL here? Don't you have a model to overfit or whatever?",
 
