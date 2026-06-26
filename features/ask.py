@@ -6,6 +6,7 @@ that it's not configured. Get a free key at https://aistudio.google.com/apikey
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
 
@@ -30,6 +31,26 @@ MAX_ANSWER = 4000  # embed description limit is 4096; leave headroom
 class Ask(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._session: aiohttp.ClientSession | None = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """A single, reused aiohttp session for Gemini calls.
+
+        Reusing one session keeps the TCP connection alive and caches DNS, so
+        most /ask calls skip a fresh `getaddrinfo` lookup entirely. That matters
+        because DNS resolution runs on asyncio's default thread pool — creating a
+        brand-new session every call made /ask sensitive to that pool being busy
+        with other blocking work."""
+        if self._session is None or self._session.closed:
+            connector = aiohttp.TCPConnector(family=socket.AF_INET, ttl_dns_cache=300)
+            self._session = aiohttp.ClientSession(
+                connector=connector, timeout=aiohttp.ClientTimeout(total=30)
+            )
+        return self._session
+
+    def cog_unload(self) -> None:
+        if self._session and not self._session.closed:
+            asyncio.create_task(self._session.close())
 
     @app_commands.command(name="ask", description="Ask the AI assistant a question.")
     @app_commands.describe(prompt="Your question for the AI assistant")
@@ -58,14 +79,10 @@ class Ask(commands.Cog):
             "Content-Type": "application/json",
         }
         try:
-            connector = aiohttp.TCPConnector(family=socket.AF_INET)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.post(
-                    url, json=payload, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    status = resp.status
-                    data = await resp.json(content_type=None)
+            session = self._get_session()
+            async with session.post(url, json=payload, headers=headers) as resp:
+                status = resp.status
+                data = await resp.json(content_type=None)
         except Exception:  # noqa: BLE001
             log.exception("Gemini request failed")
             await interaction.followup.send(

@@ -123,11 +123,20 @@ async def on_app_command_error(
             await interaction.followup.send(msg, ephemeral=True)
         else:
             await interaction.response.send_message(msg, ephemeral=True)
-    except discord.HTTPException:
+    except Exception:  # noqa: BLE001 - the error handler must never itself raise
         pass
 
 
+def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Log stray exceptions from background tasks instead of letting them bubble
+    up and risk tearing down the process. Keeps one misbehaving task from taking
+    the whole bot (and the web server it shares a process with) down."""
+    exc = context.get("exception")
+    log.error("Unhandled event-loop exception: %s", context.get("message") or exc, exc_info=exc)
+
+
 async def main() -> None:
+    asyncio.get_running_loop().set_exception_handler(_loop_exception_handler)
     problems = config.validate()
     for p in problems:
         log.warning("CONFIG: %s", p)

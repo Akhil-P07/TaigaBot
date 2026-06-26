@@ -28,6 +28,8 @@ def onboarding_embed(guild_name: str) -> discord.Embed:
             "**How to verify (2 steps):**\n"
             "1️⃣ Run `/verify name:Your Name email:you@rit.edu`\n"
             "2️⃣ Check your email for a 6-digit code, then run `/confirm code:XXXXXX`\n\n"
+            "💬 You can run these right here **or in a DM to me** — one verification "
+            "unlocks every TaigaBot server you're in.\n\n"
             f"Your email must be {allowed}. Until you verify, you can only chat in "
             f"**#{config.UNVERIFIED_CHANNEL_NAME}**.\n\n"
             "**Lost your old Discord account?** Run `/recover email:you@rit.edu` "

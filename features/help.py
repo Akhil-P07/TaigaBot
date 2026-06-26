@@ -105,10 +105,7 @@ class Help(commands.Cog):
             )
             embed.add_field(
                 name="✅ Verification (🛡️ Eboard)",
-                value=(
-                    "`/whois member` — look up a member's verified info\n"
-                    "`/unverify member` — reset a member's verification"
-                ),
+                value="`/whois member` — look up a member's verified info",
                 inline=False,
             )
             embed.add_field(

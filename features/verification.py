@@ -6,9 +6,10 @@ Flow
    → validates the email domain, checks it isn't already registered, emails a
      6-digit code, and stores a pending request in memory.
 2. /confirm code:<123456>
-   → checks the code; on success stores the member in the database
-     (discord username, real name, email), swaps Unverified → Verified, and
-     posts a celebration in #welcome.
+   → checks the code; on success stores the member in the database (discord
+     username, real name, email) and grants the Verified role across EVERY
+     server the user shares with the bot, posting a celebration in each one's
+     #welcome. Works in a DM as well as inside a server.
 
 OTP requests live in memory only (cleared on restart); the permanent record of
 who is verified lives in the database.
@@ -16,6 +17,8 @@ who is verified lives in the database.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import random
 import re
 import time
@@ -42,7 +45,7 @@ class PendingVerification:
     code: str
     email: str
     real_name: str
-    guild_id: int
+    guild_id: int | None  # None when started in a DM; resolved at /confirm time
     created_at: float
     attempts: int = 0
     recovery: bool = False  # True = transfer an existing record to this new account
@@ -69,6 +72,26 @@ class Verification(commands.Cog):
         self.bot = bot
         # discord_id -> PendingVerification
         self.pending: dict[int, PendingVerification] = {}
+        # Dedicated thread pool for the BLOCKING urllib email send. Kept separate
+        # from asyncio's default executor on purpose: that default pool is also
+        # what aiohttp uses for DNS resolution (getaddrinfo), so routing slow
+        # 20s email sends through it would starve /ask's HTTP calls and make the
+        # AI assistant lag until the emails drained. Its own 2-thread pool isolates
+        # that I/O so no other feature is affected.
+        self._email_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="otp-email"
+        )
+
+    def cog_unload(self) -> None:
+        self._email_pool.shutdown(wait=False, cancel_futures=True)
+
+    async def _send_otp(self, email: str, code: str, display_name: str, guild_name: str) -> None:
+        """Send the OTP email on the dedicated pool (raises EmailError on failure)."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            self._email_pool,
+            functools.partial(send_otp_email, email, code, display_name, guild_name),
+        )
 
     def _expired(self, p: PendingVerification) -> bool:
         return (time.time() - p.created_at) > config.OTP_TTL_MINUTES * 60
@@ -92,6 +115,64 @@ class Verification(commands.Cog):
                 return p
         return None
 
+    # ── cross-server role fan-out ──────────────────────────────────────────
+    async def _shared_members(self, user_id: int) -> list[discord.Member]:
+        """Every guild TaigaBot shares with this user, as Member objects.
+
+        Verification is global, so a DM `/verify` (where `interaction.user` is a
+        User, not a Member) can still fan the Verified role out to every server
+        the user is in with the bot. `get_member` hits the member cache (the
+        members intent is on); a cache miss falls back to a fetch, and people who
+        aren't in that guild raise and are skipped."""
+        out: list[discord.Member] = []
+        for g in self.bot.guilds:
+            m = g.get_member(user_id)
+            if m is None:
+                try:
+                    m = await g.fetch_member(user_id)
+                except discord.HTTPException:
+                    m = None
+            if m is not None:
+                out.append(m)
+        return out
+
+    async def _fan_out_verified(
+        self, members: list[discord.Member]
+    ) -> tuple[list[discord.Member], list[str], list[str]]:
+        """Grant Verified to the user in each shared guild.
+
+        Returns (newly_verified, ok_names, failed_names): members who just gained
+        the role (so we welcome them there), names of guilds where the role is now
+        applied, and names where the bot's role is too low to assign it."""
+        newly: list[discord.Member] = []
+        ok: list[str] = []
+        failed: list[str] = []
+        for m in members:
+            vrole = gu.verified_role(m.guild)
+            was_new = vrole is not None and vrole not in m.roles
+            if await gu.promote_to_verified(m):
+                if vrole is not None:
+                    ok.append(m.guild.name)
+                if was_new:
+                    newly.append(m)
+            else:
+                failed.append(m.guild.name)
+        return newly, ok, failed
+
+    async def _post_welcome(self, member: discord.Member) -> None:
+        """Best-effort public 'just verified' celebration in the guild's #welcome."""
+        welcome = gu.welcome_channel(member.guild)
+        if welcome is None:
+            return
+        sass = personality.say("verify_success", name=member.display_name)
+        desc = f"🎉 {member.mention} just verified and joined the club! Say hi 👋"
+        if sass:
+            desc += f"\n*{sass}*"
+        try:
+            await welcome.send(embed=discord.Embed(description=desc, color=config.BOT_COLOR))
+        except discord.HTTPException:
+            pass
+
     @app_commands.command(
         name="verify", description="Verify with your RIT email to unlock the server."
     )
@@ -105,13 +186,16 @@ class Verification(commands.Cog):
         email = email.strip().lower()
         name = name.strip()
 
-        # Already verified (anywhere this bot runs)? Just make sure the roles are
-        # right in this guild — no OTP needed.
+        # Already verified (anywhere this bot runs)? Re-apply the Verified role
+        # across every server they share with the bot — no OTP needed.
         if await self.bot.db.user_is_verified(member.id):
-            if isinstance(member, discord.Member):
-                await gu.promote_to_verified(member)
+            members = await self._shared_members(member.id)
+            newly, ok, _ = await self._fan_out_verified(members)
+            for m in newly:
+                await self._post_welcome(m)
+            extra = f" Re-applied your role in **{len(ok)}** server(s)." if ok else ""
             await interaction.response.send_message(
-                "✅ You're already verified! Welcome back.", ephemeral=True
+                "✅ You're already verified! Welcome back." + extra, ephemeral=True
             )
             return
 
@@ -159,7 +243,7 @@ class Verification(commands.Cog):
         code = f"{random.randint(0, 999999):06d}"
         try:
             guild_name = interaction.guild.name if interaction.guild else "TaigaBot"
-            await asyncio.to_thread(send_otp_email, email, code, member.display_name, guild_name)
+            await self._send_otp(email, code, member.display_name, guild_name)
         except EmailError as e:
             await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
             return
@@ -241,7 +325,7 @@ class Verification(commands.Cog):
         code = f"{random.randint(0, 999999):06d}"
         try:
             guild_name = interaction.guild.name if interaction.guild else "TaigaBot"
-            await asyncio.to_thread(send_otp_email, email, code, member.display_name, guild_name)
+            await self._send_otp(email, code, member.display_name, guild_name)
         except EmailError as e:
             await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
             return
@@ -301,10 +385,19 @@ class Verification(commands.Cog):
         #    account's Verified role across every server (no Eboard action) ──
         if p.recovery:
             await interaction.response.defer(ephemeral=True, thinking=True)
+            members = await self._shared_members(member.id)
+            if not members:
+                await interaction.followup.send(
+                    "❌ I couldn't find any server we both share. Join a server that has "
+                    "TaigaBot, then run `/confirm` again.",
+                    ephemeral=True,
+                )
+                return  # keep pending so a quick join + retry works within the TTL
+            primary_guild_id = interaction.guild_id or members[0].guild.id
             sid = _student_id(p.email)
             old_id = await self.bot.db.verified_discord_id_for(sid)
             moved = await self.bot.db.transfer_verification(
-                sid, member.id, str(member), p.guild_id
+                sid, member.id, str(member), primary_guild_id
             )
             del self.pending[member.id]
             if not moved:
@@ -327,8 +420,10 @@ class Verification(commands.Cog):
                     ):
                         revoked += 1
 
-            # Grant Verified on the new account in this server.
-            await gu.promote_to_verified(member)
+            # Grant Verified on the NEW account across every shared server.
+            newly, ok, _ = await self._fan_out_verified(members)
+            for m in newly:
+                await self._post_welcome(m)
 
             # Audit trail for Eboard.
             embed = discord.Embed(
@@ -340,11 +435,12 @@ class Verification(commands.Cog):
                 ),
                 color=config.BOT_COLOR,
             )
-            await gu.log_mod_action(guild, embed)
+            await gu.log_mod_action(guild or members[0].guild, embed)
 
             await interaction.followup.send(
-                "✅ Recovered! Your verification now lives on **this** account, and your "
-                "old account's Verified role has been removed everywhere. Welcome back!",
+                "✅ Recovered! Your verification now lives on **this** account, your old "
+                "account's Verified role was removed everywhere, and I re-applied your role "
+                f"in **{len(ok)}** server(s). Welcome back!",
                 ephemeral=True,
             )
             return
@@ -359,45 +455,46 @@ class Verification(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        members = await self._shared_members(member.id)
+        if not members:
+            await interaction.followup.send(
+                "❌ I couldn't find any server we both share. Join a server that has "
+                "TaigaBot, then run `/confirm` again to finish.",
+                ephemeral=True,
+            )
+            return  # keep pending; nothing written to the DB yet
+
+        # Store one shared guild as the record's home (guild_id is NOT NULL); the
+        # role itself is applied across every shared server below.
+        primary_guild_id = interaction.guild_id or members[0].guild.id
         await self.bot.db.add_verified_user(
             discord_id=member.id,
             discord_username=str(member),
             real_name=p.real_name,
             email=p.email,
-            guild_id=p.guild_id,
+            guild_id=primary_guild_id,
         )
         del self.pending[member.id]
 
-        # Swap roles (Unverified → Verified).
-        if not await gu.promote_to_verified(member):
-            await interaction.followup.send(
-                "✅ Verified in the database, but I couldn't change your roles "
-                "(my role may be too low). Ping an Eboard member.",
-                ephemeral=True,
-            )
-            return
+        # Fan the Verified role out to every shared server, posting a welcome
+        # wherever the role was newly granted.
+        newly, ok, failed = await self._fan_out_verified(members)
+        for m in newly:
+            await self._post_welcome(m)
 
         sass = personality.say("verify_success", name=member.display_name)
-        await interaction.followup.send(
-            "🎉 You're verified! The rest of the server is now unlocked. Welcome to the AI Club!"
-            + (f"\n\n*{sass}*" if sass else ""),
-            ephemeral=True,
-        )
-
-        # Public celebration.
-        welcome = gu.welcome_channel(guild)
-        if welcome:
-            desc = f"🎉 {member.mention} just verified and joined the club! Say hi 👋"
-            if sass:
-                desc += f"\n*{personality.say('verify_success', name=member.display_name)}*"
-            embed = discord.Embed(
-                description=desc,
-                color=config.BOT_COLOR,
+        if ok:
+            names = ", ".join(f"**{n}**" for n in ok)
+            head = f"🎉 You're verified! Unlocked **{len(ok)}** server(s): {names}."
+        else:
+            head = "🎉 You're verified! Your access applies wherever TaigaBot manages roles."
+        msg = head + (f"\n\n*{sass}*" if sass else "")
+        if failed:
+            msg += (
+                f"\n\n⚠️ I couldn't assign the role in: {', '.join(failed)} "
+                "(my role may be too low there — ping an Eboard member)."
             )
-            try:
-                await welcome.send(embed=embed)
-            except discord.HTTPException:
-                pass
+        await interaction.followup.send(msg, ephemeral=True)
 
     # ── Eboard tools ──────────────────────────────────────────────────────
     @app_commands.command(
@@ -441,38 +538,6 @@ class Verification(commands.Cog):
             name="Verified", value=f"<t:{row['verified_at']}:R>", inline=False
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(
-        name="unverify",
-        description="(Eboard) Remove a member's verification (frees their email).",
-    )
-    @app_commands.describe(member="The member to un-verify")
-    async def unverify(self, interaction: discord.Interaction, member: discord.Member):
-        from utils.checks import member_has_role
-
-        if not (
-            interaction.user.guild_permissions.administrator
-            or member_has_role(interaction.user, config.EBOARD_ROLE_NAME)
-        ):
-            await interaction.response.send_message(
-                f"⛔ Only **{config.EBOARD_ROLE_NAME}** can use this.", ephemeral=True
-            )
-            return
-
-        await self.bot.db.remove_verified_user(member.id)
-        guild = interaction.guild
-        unverified = gu.unverified_role(guild)
-        verified = gu.verified_role(guild)
-        try:
-            if verified and verified in member.roles:
-                await member.remove_roles(verified, reason="Unverified by Eboard")
-            if unverified and unverified not in member.roles:
-                await member.add_roles(unverified, reason="Unverified by Eboard")
-        except discord.Forbidden:
-            pass
-        await interaction.response.send_message(
-            f"♻️ {member.mention} has been un-verified.", ephemeral=True
-        )
 
 
 async def setup(bot: commands.Bot):

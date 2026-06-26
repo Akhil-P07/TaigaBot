@@ -27,8 +27,8 @@ everywhere) and their verification status (see the verification note below).
 | Feature | File | Commands |
 |---|---|---|
 | **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
-| **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard), `/unverify` (Eboard) |
-| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, **phishing**), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
+| **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard) |
+| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, phishing), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
@@ -151,7 +151,7 @@ TaigaBot) so nobody keeps old access until they re-verify and re-pick in `#roles
 One RIT account = one membership: `jdoe@rit.edu` and `jdoe@g.rit.edu` are treated
 as the same person (matched on the part before the `@`). A member who verified on
 one server the bot is in is auto-granted `Verified` when joining another — no
-re-verification needed. Eboard can `/whois @member` or `/unverify @member`.
+re-verification needed. Eboard can look up a member with `/whois @member`.
 
 **Lost your Discord account?** Run `/recover email:<your RIT email>` on the new
 account and confirm the emailed code. This **moves** your verification to the new
@@ -215,15 +215,15 @@ credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
 
 The `phishing` automod filter catches scam messages — fake Nitro/Steam gifts,
 "free giveaway" link drops, malware `.exe`s — that a static word list misses. It
-uses a small **machine-learning model trained offline** on the
+uses a small machine-learning model trained offline on the
 [`wangyuancheng/discord-phishing-scam-clean`](https://huggingface.co/datasets/wangyuancheng/discord-phishing-scam-clean)
 dataset (1,830 labelled Discord messages).
 
 - **Runs on-device, cheap.** The trained model ships as a ~55 KB JSON of token
   weights ([`dataset/phishing_model.json`](dataset/phishing_model.json)). At
-  runtime the bot just tokenises the message and sums weights — **pure Python, no
-  extra dependencies, well under a megabyte of RAM**, so it's happy on a 500 MB
-  Railway instance. **No message data ever leaves the bot.**
+  runtime the bot just tokenises the message and sums weights — pure Python, no
+  extra dependencies, well under a megabyte of RAM, so it's happy on a 500 MB
+  Railway instance. No message data ever leaves the bot.
 - **Tuned for precision** (~0.94 on held-out data) so real members' messages
   aren't deleted; it accepts missing some scams over false positives. On a hit it
   deletes the message, auto-warns the user, and alerts the Eboard.

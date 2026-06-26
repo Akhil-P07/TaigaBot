@@ -14,6 +14,7 @@ reaction_roles  : emoji -> role bindings on specific messages
 """
 from __future__ import annotations
 
+import contextlib
 import time
 import aiosqlite
 
@@ -198,6 +199,22 @@ class Database:
         if self.conn:
             await self.conn.close()
 
+    @contextlib.asynccontextmanager
+    async def _tx(self):
+        """Wrap writes so they commit on success and ROLL BACK on any error.
+
+        Every feature shares this one connection. Without the rollback, a failed
+        statement (e.g. a constraint violation) would leave an open, half-finished
+        transaction on the connection — which can break or stall later queries
+        from completely unrelated features. Rolling back keeps the shared
+        connection clean so one feature's DB error can never cascade to others."""
+        try:
+            yield
+            await self.conn.commit()
+        except Exception:
+            await self.conn.rollback()
+            raise
+
     async def snapshot(self, dest_path: str) -> None:
         """Write a consistent copy of the WHOLE DB to dest_path.
 
@@ -279,13 +296,13 @@ class Database:
     async def add_verified_user(
         self, discord_id: int, discord_username: str, real_name: str, email: str, guild_id: int
     ) -> None:
-        await self.conn.execute(
-            """INSERT OR REPLACE INTO verified_users
-               (discord_id, discord_username, real_name, email, guild_id, verified_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (discord_id, discord_username, real_name, email.lower(), guild_id, int(time.time())),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                """INSERT OR REPLACE INTO verified_users
+                   (discord_id, discord_username, real_name, email, guild_id, verified_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (discord_id, discord_username, real_name, email.lower(), guild_id, int(time.time())),
+            )
 
     async def get_verified_user(self, discord_id: int) -> aiosqlite.Row | None:
         cur = await self.conn.execute(
@@ -294,10 +311,10 @@ class Database:
         return await cur.fetchone()
 
     async def remove_verified_user(self, discord_id: int) -> None:
-        await self.conn.execute(
-            "DELETE FROM verified_users WHERE discord_id = ?", (discord_id,)
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "DELETE FROM verified_users WHERE discord_id = ?", (discord_id,)
+            )
 
     async def verified_discord_id_for(self, student_id: str) -> int | None:
         """The Discord ID currently linked to this RIT student id (local part of the
@@ -331,13 +348,13 @@ class Database:
         UPDATE — the old discord_id row becomes the new account's; stamps
         last_recovery_at for the rate limit. Returns True if a record was moved."""
         now = int(time.time())
-        cur = await self.conn.execute(
-            "UPDATE verified_users SET discord_id = ?, discord_username = ?, "
-            "guild_id = ?, verified_at = ?, last_recovery_at = ? "
-            "WHERE lower(substr(email, 1, instr(email, '@') - 1)) = ?",
-            (new_discord_id, new_username, guild_id, now, now, student_id.lower()),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            cur = await self.conn.execute(
+                "UPDATE verified_users SET discord_id = ?, discord_username = ?, "
+                "guild_id = ?, verified_at = ?, last_recovery_at = ? "
+                "WHERE lower(substr(email, 1, instr(email, '@') - 1)) = ?",
+                (new_discord_id, new_username, guild_id, now, now, student_id.lower()),
+            )
         return cur.rowcount > 0
 
     async def count_verified(self, guild_id: int) -> int:
@@ -354,10 +371,10 @@ class Database:
         )
         row = await cur.fetchone()
         if row is None:
-            await self.conn.execute(
-                "INSERT INTO guild_settings (guild_id) VALUES (?)", (guild_id,)
-            )
-            await self.conn.commit()
+            async with self._tx():
+                await self.conn.execute(
+                    "INSERT INTO guild_settings (guild_id) VALUES (?)", (guild_id,)
+                )
             return {"guild_id": guild_id, **DEFAULT_SETTINGS}
         return dict(row)
 
@@ -365,25 +382,25 @@ class Database:
         if key not in DEFAULT_SETTINGS:
             raise ValueError(f"Unknown setting: {key}")
         await self.get_settings(guild_id)  # ensure row exists
-        await self.conn.execute(
-            f"UPDATE guild_settings SET {key} = ? WHERE guild_id = ?", (value, guild_id)
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                f"UPDATE guild_settings SET {key} = ? WHERE guild_id = ?", (value, guild_id)
+            )
 
     # ── banned words ──────────────────────────────────────────────────────
     async def add_banned_word(self, guild_id: int, word: str) -> None:
-        await self.conn.execute(
-            "INSERT OR IGNORE INTO banned_words (guild_id, word) VALUES (?, ?)",
-            (guild_id, word.lower()),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "INSERT OR IGNORE INTO banned_words (guild_id, word) VALUES (?, ?)",
+                (guild_id, word.lower()),
+            )
 
     async def remove_banned_word(self, guild_id: int, word: str) -> None:
-        await self.conn.execute(
-            "DELETE FROM banned_words WHERE guild_id = ? AND word = ?",
-            (guild_id, word.lower()),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "DELETE FROM banned_words WHERE guild_id = ? AND word = ?",
+                (guild_id, word.lower()),
+            )
 
     async def get_banned_words(self, guild_id: int) -> list[str]:
         cur = await self.conn.execute(
@@ -401,15 +418,15 @@ class Database:
     async def upsert_level(
         self, user_id: int, xp: int, level: int, last_msg_ts: float
     ) -> None:
-        await self.conn.execute(
-            """INSERT INTO levels (user_id, xp, level, last_msg_ts)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id)
-               DO UPDATE SET xp=excluded.xp, level=excluded.level,
-                             last_msg_ts=excluded.last_msg_ts""",
-            (user_id, xp, level, last_msg_ts),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                """INSERT INTO levels (user_id, xp, level, last_msg_ts)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(user_id)
+                   DO UPDATE SET xp=excluded.xp, level=excluded.level,
+                                 last_msg_ts=excluded.last_msg_ts""",
+                (user_id, xp, level, last_msg_ts),
+            )
 
     async def leaderboard(self, limit: int = 10) -> list[aiosqlite.Row]:
         cur = await self.conn.execute(
@@ -431,12 +448,12 @@ class Database:
     async def add_warning(
         self, guild_id: int, user_id: int, moderator_id: int, reason: str
     ) -> int:
-        cur = await self.conn.execute(
-            """INSERT INTO warnings (guild_id, user_id, moderator_id, reason, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (guild_id, user_id, moderator_id, reason, int(time.time())),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            cur = await self.conn.execute(
+                """INSERT INTO warnings (guild_id, user_id, moderator_id, reason, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (guild_id, user_id, moderator_id, reason, int(time.time())),
+            )
         return cur.lastrowid
 
     async def get_warnings(self, guild_id: int, user_id: int) -> list[aiosqlite.Row]:
@@ -448,10 +465,10 @@ class Database:
         return await cur.fetchall()
 
     async def clear_warnings(self, guild_id: int, user_id: int) -> int:
-        cur = await self.conn.execute(
-            "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
-        )
-        await self.conn.commit()
+        async with self._tx():
+            cur = await self.conn.execute(
+                "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
+            )
         return cur.rowcount
 
     async def cross_server_warnings(self, user_id: int, exclude_guild_id: int) -> tuple[int, int]:
@@ -473,19 +490,19 @@ class Database:
     async def add_reaction_role(
         self, guild_id: int, message_id: int, emoji: str, role_id: int
     ) -> None:
-        await self.conn.execute(
-            """INSERT OR REPLACE INTO reaction_roles (guild_id, message_id, emoji, role_id)
-               VALUES (?, ?, ?, ?)""",
-            (guild_id, message_id, emoji, role_id),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                """INSERT OR REPLACE INTO reaction_roles (guild_id, message_id, emoji, role_id)
+                   VALUES (?, ?, ?, ?)""",
+                (guild_id, message_id, emoji, role_id),
+            )
 
     async def remove_reaction_role(self, message_id: int, emoji: str) -> None:
-        await self.conn.execute(
-            "DELETE FROM reaction_roles WHERE message_id = ? AND emoji = ?",
-            (message_id, emoji),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "DELETE FROM reaction_roles WHERE message_id = ? AND emoji = ?",
+                (message_id, emoji),
+            )
 
     async def get_reaction_role(self, message_id: int, emoji: str) -> int | None:
         cur = await self.conn.execute(
@@ -508,15 +525,15 @@ class Database:
         role_id: int, lead_ids: list[int], description: str, tags: str,
     ) -> None:
         leads_csv = ",".join(str(i) for i in lead_ids)
-        await self.conn.execute(
-            """INSERT OR REPLACE INTO projects
-               (channel_id, guild_id, name, role_id, lead_id, lead_ids,
-                description, tags, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (channel_id, guild_id, name, role_id, lead_ids[0], leads_csv,
-             description, tags, int(time.time())),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                """INSERT OR REPLACE INTO projects
+                   (channel_id, guild_id, name, role_id, lead_id, lead_ids,
+                    description, tags, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (channel_id, guild_id, name, role_id, lead_ids[0], leads_csv,
+                 description, tags, int(time.time())),
+            )
 
     async def get_project(self, channel_id: int) -> aiosqlite.Row | None:
         cur = await self.conn.execute(
@@ -537,40 +554,40 @@ class Database:
         return await cur.fetchall()
 
     async def delete_project(self, channel_id: int) -> None:
-        await self.conn.execute("DELETE FROM projects WHERE channel_id = ?", (channel_id,))
-        await self.conn.execute(
-            "DELETE FROM project_requests WHERE channel_id = ?", (channel_id,)
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute("DELETE FROM projects WHERE channel_id = ?", (channel_id,))
+            await self.conn.execute(
+                "DELETE FROM project_requests WHERE channel_id = ?", (channel_id,)
+            )
 
     async def update_project_details(
         self, channel_id: int, name: str, description: str, tags: str
     ) -> None:
         """Edit a project's editable fields in place (keeps role/leads/created_at)."""
-        await self.conn.execute(
-            "UPDATE projects SET name = ?, description = ?, tags = ? WHERE channel_id = ?",
-            (name, description, tags, channel_id),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "UPDATE projects SET name = ?, description = ?, tags = ? WHERE channel_id = ?",
+                (name, description, tags, channel_id),
+            )
 
     async def set_intro_message(self, channel_id: int, message_id: int) -> None:
         """Remember the id of the project channel's intro embed, so it can be
         deleted and reposted when the project is edited."""
-        await self.conn.execute(
-            "UPDATE projects SET intro_message_id = ? WHERE channel_id = ?",
-            (message_id, channel_id),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "UPDATE projects SET intro_message_id = ? WHERE channel_id = ?",
+                (message_id, channel_id),
+            )
 
     # ── project requests ──────────────────────────────────────────────────────
 
     async def add_project_request(self, guild_id: int, channel_id: int, user_id: int) -> int:
-        cur = await self.conn.execute(
-            """INSERT INTO project_requests (guild_id, channel_id, user_id, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (guild_id, channel_id, user_id, int(time.time())),
-        )
-        await self.conn.commit()
+        async with self._tx():
+            cur = await self.conn.execute(
+                """INSERT INTO project_requests (guild_id, channel_id, user_id, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (guild_id, channel_id, user_id, int(time.time())),
+            )
         return cur.lastrowid
 
     async def get_project_request(self, request_id: int) -> aiosqlite.Row | None:
@@ -587,7 +604,7 @@ class Database:
         return await cur.fetchone() is not None
 
     async def update_request_status(self, request_id: int, status: str) -> None:
-        await self.conn.execute(
-            "UPDATE project_requests SET status = ? WHERE id = ?", (status, request_id)
-        )
-        await self.conn.commit()
+        async with self._tx():
+            await self.conn.execute(
+                "UPDATE project_requests SET status = ? WHERE id = ?", (status, request_id)
+            )

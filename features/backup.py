@@ -57,7 +57,7 @@ async def build_guild_backup(db, guild: discord.Guild):
         writer = csv.writer(f)
         writer.writerow([
             "display_name", "username", "user_id", "is_admin",
-            "has_verified_role", "verified_in_db", "real_name", "email", "verified_at",
+            "has_verified_role", "verified_in_db", "real_name", "email",
         ])
         async for m in guild.fetch_members(limit=None):
             if m.bot:
@@ -71,7 +71,6 @@ async def build_guild_backup(db, guild: discord.Guild):
                 m.display_name, str(m), m.id, is_admin, has_role, info is not None,
                 info["real_name"] if info else "",
                 info["email"] if info else "",
-                info["verified_at"] if info else "",
             ])
             count += 1
 
