@@ -14,6 +14,9 @@
 
 /dropproject (Eboard): select from DB-tracked projects to delete channel + role.
 
+/deletetag (Eboard): remove a tag from every project that carries it (updates the
+  DB and refreshes each affected project's intro embed in place).
+
 /joinproject [tag]: anyone can browse projects (optionally filtered by tag),
   pick one, and request to join. Every project lead gets a DM with persistent
   Approve/Deny buttons; any lead can decide. On approval the role is granted and
@@ -1350,6 +1353,73 @@ class Projects(commands.Cog):
         )
         embed.set_footer(text="Filter with /projects tag:<tag> or the dropdown in /projects.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /deletetag ────────────────────────────────────────────────────────────
+
+    async def _refresh_intro(self, guild: discord.Guild, project, new_tags: str) -> None:
+        """Best-effort: edit a project's intro embed in place so it reflects the
+        updated tags. Editing (vs. delete+repost) keeps the message in position
+        and avoids spamming the channel when many projects are touched at once."""
+        channel = guild.get_channel(project["channel_id"])
+        if not isinstance(channel, discord.TextChannel):
+            return
+        intro_id = project["intro_message_id"] if "intro_message_id" in project.keys() else 0
+        if not intro_id:
+            return
+        role = guild.get_role(project["role_id"])
+        lead_mentions = [f"<@{i}>" for i in _parse_leads(project)]
+        embed = _build_intro_embed(
+            project["name"], project["description"], new_tags, lead_mentions, role
+        )
+        try:
+            msg = await channel.fetch_message(intro_id)
+            await msg.edit(embed=embed)
+        except discord.HTTPException:
+            pass  # message gone / can't edit — the DB is still updated
+
+    @app_commands.command(
+        name="deletetag",
+        description="(Eboard) Remove a tag from every project that uses it.",
+    )
+    @app_commands.describe(tag="The tag to delete (stripped from all projects)")
+    @is_eboard()
+    async def deletetag(self, interaction: discord.Interaction, tag: str):
+        target = tag.strip().lower().lstrip("#")
+        if not target:
+            await interaction.response.send_message(
+                "Give a tag to delete, e.g. `/deletetag tag:web`.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        rows = await self.bot.db.list_projects(interaction.guild_id)
+        affected = []  # (row, new_tags_csv)
+        for row in rows:
+            existing = [t.strip().lower() for t in (row["tags"] or "").split(",") if t.strip()]
+            if target in existing:
+                new_tags = ",".join(t for t in existing if t != target)
+                affected.append((row, new_tags))
+
+        if not affected:
+            await interaction.followup.send(
+                f"No projects use the tag `#{target}`. See current tags with `/projecttags`.",
+                ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        for row, new_tags in affected:
+            await self.bot.db.update_project_details(
+                row["channel_id"], row["name"], row["description"], new_tags
+            )
+            await self._refresh_intro(guild, row, new_tags)
+
+        names = ", ".join(f"**{r['name']}**" for r, _ in affected[:10])
+        more = f" (+{len(affected) - 10} more)" if len(affected) > 10 else ""
+        await interaction.followup.send(
+            f"🏷️ Removed `#{target}` from **{len(affected)}** project(s): {names}{more}.",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

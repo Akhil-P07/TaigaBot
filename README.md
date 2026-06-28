@@ -30,7 +30,7 @@ everywhere) and their verification status (see the verification note below).
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard) |
 | **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, phishing), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
-| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
+| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |

@@ -90,7 +90,8 @@ class Help(commands.Cog):
                 value=(
                     "`/createproject lead:@member` — create a project (role, channel, lead(s))\n"
                     "`/editproject` — edit a project's name/description/tags (reposts the intro)\n"
-                    "`/dropproject` — delete a project's channel, role, and entry (select from list)"
+                    "`/dropproject` — delete a project's channel, role, and entry (select from list)\n"
+                    "`/deletetag tag` — remove a tag from every project that uses it"
                 ),
                 inline=False,
             )
