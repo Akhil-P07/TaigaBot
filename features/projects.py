@@ -14,8 +14,10 @@
 
 /dropproject (Eboard): select from DB-tracked projects to delete channel + role.
 
-/deletetag (Eboard): remove a tag from every project that carries it (updates the
-  DB and refreshes each affected project's intro embed in place).
+/deletetag [tag] (Eboard): remove a tag from every project that carries it
+  (updates the DB and refreshes each affected project's intro embed in place).
+  Leave the tag blank to pick it from a dropdown of existing tags — the same
+  tag list the /projects filter shows — so it no longer appears there.
 
 /joinproject [tag]: anyone can browse projects (optionally filtered by tag),
   pick one, and request to join. Every project lead gets a DM with persistent
@@ -884,6 +886,53 @@ class _TagFilterView(discord.ui.View):
         self.add_item(_TagSelect(tags))
 
 
+# ── /deletetag tag picker (same tag list as the /projects filter) ────────────
+
+class _DeleteTagSelect(discord.ui.Select):
+    def __init__(self, tags: list[str]):
+        options = [discord.SelectOption(label=f"#{t}", value=t) for t in tags[:25]]
+        super().__init__(
+            placeholder="Pick the tag to delete…",
+            min_values=1, max_values=1, options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class _DeleteTagView(discord.ui.View):
+    """Lets the Eboard pick a tag to strip from every project — the same tag
+    list the /projects filter shows, so deleting one removes it from there too."""
+
+    def __init__(self, tags: list[str]):
+        super().__init__(timeout=120)
+        self.select = _DeleteTagSelect(tags)
+        self.add_item(self.select)
+        self.confirmed = False
+        self.tag: str | None = None
+
+    @discord.ui.button(label="🗑️ Delete tag", style=discord.ButtonStyle.danger, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.select.values:
+            await interaction.response.send_message(
+                "Pick a tag to delete first.", ephemeral=True
+            )
+            return
+        self.tag = self.select.values[0]
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="🗑️ Deleting tag…", view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="❌ Cancelled.", view=self)
+        self.stop()
+
+
 # ── /editproject (pick a project → modal prefilled with its details) ──────────
 
 class _EditModal(discord.ui.Modal, title="Edit project details"):
@@ -1377,21 +1426,10 @@ class Projects(commands.Cog):
         except discord.HTTPException:
             pass  # message gone / can't edit — the DB is still updated
 
-    @app_commands.command(
-        name="deletetag",
-        description="(Eboard) Remove a tag from every project that uses it.",
-    )
-    @app_commands.describe(tag="The tag to delete (stripped from all projects)")
-    @is_eboard()
-    async def deletetag(self, interaction: discord.Interaction, tag: str):
-        target = tag.strip().lower().lstrip("#")
-        if not target:
-            await interaction.response.send_message(
-                "Give a tag to delete, e.g. `/deletetag tag:web`.", ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
+    async def _apply_tag_deletion(self, interaction: discord.Interaction, target: str) -> None:
+        """Strip `target` from every project that carries it, update the DB and
+        refresh each affected intro embed, then report the result. Assumes the
+        interaction has already been responded to or deferred (uses followup)."""
         rows = await self.bot.db.list_projects(interaction.guild_id)
         affected = []  # (row, new_tags_csv)
         for row in rows:
@@ -1420,6 +1458,48 @@ class Projects(commands.Cog):
             f"🏷️ Removed `#{target}` from **{len(affected)}** project(s): {names}{more}.",
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="deletetag",
+        description="(Eboard) Remove a tag from every project that uses it.",
+    )
+    @app_commands.describe(tag="The tag to delete (leave blank to pick from a dropdown)")
+    @is_eboard()
+    async def deletetag(self, interaction: discord.Interaction, tag: str | None = None):
+        # Tag typed out: delete it directly.
+        if tag is not None:
+            target = tag.strip().lower().lstrip("#")
+            if not target:
+                await interaction.response.send_message(
+                    "Give a tag to delete, e.g. `/deletetag tag:web`.", ephemeral=True
+                )
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            await self._apply_tag_deletion(interaction, target)
+            return
+
+        # No tag given: show a dropdown of every existing tag — the same list the
+        # /projects filter shows — so picking one removes it from there too.
+        tags = _distinct_tags(await self.bot.db.list_projects(interaction.guild_id))
+        if not tags:
+            await interaction.response.send_message(
+                "No tags to delete yet. Add them when creating a project with "
+                "`/createproject`.",
+                ephemeral=True,
+            )
+            return
+
+        view = _DeleteTagView(tags)
+        await interaction.response.send_message(
+            "**Delete a tag**\nPick the tag to strip from every project that uses "
+            "it — it'll also drop out of the `/projects` filter dropdown.",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.confirmed or view.tag is None:
+            return
+        await self._apply_tag_deletion(interaction, view.tag)
 
 
 async def setup(bot: commands.Bot) -> None:
