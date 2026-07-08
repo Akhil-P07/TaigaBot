@@ -14,6 +14,8 @@ dataset/discord-phishing-scam-detection.csv
 .claude/
 .vscode/
 .idea/
+CLAUDE.md
+graphify-out/
 
 # Python
 __pycache__/

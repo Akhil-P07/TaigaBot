@@ -30,9 +30,15 @@
   leads can't leave this way — they ask Eboard to /dropproject instead.
 
 /projects [tag]: browse all projects, optionally filtered by tag.
+
+Shared "Project Lead" role: every lead/co-lead also gets a single server-wide
+role (name via PROJECT_LEAD_ROLE_NAME, default "Project Lead"). It's created on
+demand, granted at project create/link time, and reconciled from the projects
+table once on startup (grant-only — never stripped automatically).
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -43,6 +49,8 @@ from discord.ext import commands
 import config
 from utils import guildutils as gu
 from utils.checks import is_eboard, member_has_role
+
+log = logging.getLogger("taigabot.projects")
 
 NEW_CATEGORY_SENTINEL = "__new__"
 
@@ -545,11 +553,14 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
         role = view.role
         leads = view.leads
 
-        # Give every lead the project role.
+        # Give every lead the project role (plus the shared Project Lead role).
+        lead_role = await gu.ensure_project_lead_role(guild)
         for lead in leads:
             try:
                 if role not in lead.roles:
                     await lead.add_roles(role, reason=f"Team lead of {name}")
+                if lead_role and lead_role not in lead.roles:
+                    await lead.add_roles(lead_role, reason=f"Team lead of {name}")
             except discord.Forbidden:
                 pass
 
@@ -611,11 +622,15 @@ class _ProjectModal(discord.ui.Modal, title="Create a new project"):
                     reason=f"TaigaBot: project role for {name}",
                 )
 
-            # Give every team lead the project role right away.
+            # Give every team lead the project role (plus the shared Project
+            # Lead role) right away.
+            lead_role = await gu.ensure_project_lead_role(guild)
             for lead in leads:
                 try:
                     if role not in lead.roles:
                         await lead.add_roles(role, reason=f"Team lead of {name}")
+                    if lead_role and lead_role not in lead.roles:
+                        await lead.add_roles(lead_role, reason=f"Team lead of {name}")
                 except discord.Forbidden:
                     pass
 
@@ -1055,6 +1070,62 @@ class _EditView(discord.ui.View):
 class Projects(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._lead_role_synced = False
+
+    # ── Startup: shared Project Lead role ───────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # on_ready re-fires on every reconnect; reconcile only once per process.
+        if self._lead_role_synced:
+            return
+        self._lead_role_synced = True
+        for guild in self.bot.guilds:
+            try:
+                await self._sync_project_lead_role(guild)
+            except Exception:  # noqa: BLE001 - one bad guild must not stop the rest
+                log.exception("Project Lead role sync failed for guild %s", guild.id)
+
+    async def _sync_project_lead_role(self, guild: discord.Guild) -> None:
+        """Ensure the shared Project Lead role exists and every lead/co-lead of
+        a DB-tracked project carries it. Grant-only — never removes the role."""
+        rows = await self.bot.db.list_projects(guild.id)
+        if not rows:
+            return
+        lead_role = await gu.ensure_project_lead_role(guild)
+        if lead_role is None:
+            log.warning(
+                "Can't create the '%s' role in %s — missing Manage Roles.",
+                config.PROJECT_LEAD_ROLE_NAME, guild.name,
+            )
+            return
+
+        lead_ids = {i for row in rows for i in _parse_leads(row)}
+        granted = 0
+        for uid in lead_ids:
+            member = guild.get_member(uid)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(uid)
+                except discord.HTTPException:
+                    continue  # lead left the server (or invalid id)
+            if lead_role in member.roles:
+                continue
+            try:
+                await member.add_roles(lead_role, reason="TaigaBot: project lead")
+                granted += 1
+            except discord.Forbidden:
+                # Role sits above the bot — it'll fail for everyone, stop here.
+                log.warning(
+                    "Can't grant '%s' in %s — move TaigaBot's role above it.",
+                    lead_role.name, guild.name,
+                )
+                return
+        if granted:
+            log.info(
+                "Granted '%s' to %d project lead(s) in %s.",
+                lead_role.name, granted, guild.name,
+            )
 
     # ── /createproject ─────────────────────────────────────────────────────
 
