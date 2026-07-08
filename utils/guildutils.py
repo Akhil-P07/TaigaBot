@@ -35,6 +35,25 @@ def verified_role(guild: discord.Guild) -> discord.Role | None:
     return get_role(guild, config.VERIFIED_ROLE_NAME)
 
 
+def project_lead_role(guild: discord.Guild) -> discord.Role | None:
+    return get_role(guild, config.PROJECT_LEAD_ROLE_NAME)
+
+
+async def ensure_project_lead_role(guild: discord.Guild) -> discord.Role | None:
+    """Resolve the shared Project Lead role, creating it if the server doesn't
+    have one yet. Returns None if the bot lacks Manage Roles."""
+    role = project_lead_role(guild)
+    if role is None:
+        try:
+            role = await guild.create_role(
+                name=config.PROJECT_LEAD_ROLE_NAME,
+                reason="TaigaBot: shared role for all project leads",
+            )
+        except discord.Forbidden:
+            return None
+    return role
+
+
 def welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return get_channel(guild, config.WELCOME_CHANNEL_NAME)
 
