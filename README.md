@@ -28,7 +28,7 @@ everywhere) and their verification status (see the verification note below).
 |---|---|---|
 | **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard) |
-| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, phishing), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard) |
+| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, phishing, contact), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard); deleted-message audit log to `#mod-log` |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
@@ -256,6 +256,11 @@ dataset (1,830 labelled Discord messages).
 - **Phishing/scam filter** — see [Phishing / scam detection](#phishing--scam-detection)
   above; retrain with `python dataset/train_phishing_model.py`, tune
   `TARGET_PRECISION` in that script to trade recall for precision.
+- **Contact-info / solicitation filter** — deletes messages sharing personal
+  phone numbers or emails, payment handles (Cash App / Venmo / Zelle / PayPal),
+  or "reach me off-server" pitches. On by default; `/automod disable contact` to
+  turn it off. Tune the `_PHONE_RE` / `_EMAIL_RE` / `_PAYMENT_RE` / `_PLATFORM_RE`
+  patterns near the top of [`features/moderation.py`](features/moderation.py).
 - **Resources & AI terms** — `RESOURCES` / `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
 - **XP tuning** — top of [`features/leveling.py`](features/leveling.py).
@@ -281,7 +286,8 @@ against that and run automatically:
 - `/setup` creates a private, **Eboard-only** `#taiga-backups`.
 - Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads, **per server**, a
   `.db` snapshot of *only that server's* data plus a **roster CSV** of its current
-  Verified/admin members. `/backup` does it on demand; `python backup_now.py`
+  Verified members (admins are omitted — they're already visible in Discord).
+  `/backup` does it on demand; `python backup_now.py`
   triggers it from a shell (`GID=<id> python backup_now.py` for one server).
 - **Restore:** download the latest `.db` from `#taiga-backups` and put it at the
   bot's `DB_PATH`.

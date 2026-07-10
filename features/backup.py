@@ -10,7 +10,8 @@ container reset — you re-download the latest `.db` and drop it back in.
 Each guild's backup contains ONLY that guild's rows (its verified members, XP,
 warnings, settings, …) — never other servers' data — so one server's Eboard can
 never see another's names/emails. Alongside the .db, each backup includes a CSV
-roster of the guild's current members who hold the Verified role or are admins.
+roster of the guild's current members who hold the Verified role (admins are
+omitted — they're already visible in Discord).
 /setup creates the Eboard-only backup channel (named BACKUP_CHANNEL_NAME) in
 each server.
 """
@@ -39,11 +40,11 @@ async def build_guild_backup(db, guild: discord.Guild):
     `files` is a list of (temp_path, upload_filename); the caller sends them and
     then deletes the temp paths. It contains:
       • the filtered per-guild database (.db), and
-      • a CSV roster of the guild's current verified + admin members.
+      • a CSV roster of the guild's current verified members.
 
-    A current member is rostered if they hold the Verified role or are an
-    administrator. (Members who verified on another server still appear, because
-    joining here auto-grants them the Verified role.)
+    A current member is rostered if they hold the Verified role. Admins are
+    omitted (they're already visible in Discord). Members who verified on another
+    server still appear, because joining here auto-grants them the Verified role.
     """
     ts = time.strftime("%Y%m%d-%H%M%S")
     db_path = os.path.join(tempfile.gettempdir(), f"taigabot-{guild.id}-{ts}.db")
@@ -56,19 +57,18 @@ async def build_guild_backup(db, guild: discord.Guild):
     with open(roster_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "display_name", "username", "user_id", "is_admin",
-            "has_verified_role", "verified_in_db", "real_name", "email",
+            "display_name", "username", "user_id",
+            "verified_in_db", "real_name", "email",
         ])
         async for m in guild.fetch_members(limit=None):
             if m.bot:
                 continue
-            is_admin = m.guild_permissions.administrator
             has_role = any(r.name.lower() == verified_role for r in m.roles)
-            if not (is_admin or has_role):
+            if not has_role:  # verified members only — admins are already visible in Discord
                 continue
             info = await db.get_verified_user(m.id)  # fill name/email if on record
             writer.writerow([
-                m.display_name, str(m), m.id, is_admin, has_role, info is not None,
+                m.display_name, str(m), m.id, info is not None,
                 info["real_name"] if info else "",
                 info["email"] if info else "",
             ])
@@ -123,7 +123,7 @@ class Backup(commands.Cog):
             await channel.send(
                 content=(
                     f"🗄️ Backup for **{guild.name}** — {ts} "
-                    f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified/admin member(s))"
+                    f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified member(s))"
                 ),
                 files=files,
             )

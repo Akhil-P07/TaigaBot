@@ -34,6 +34,47 @@ from utils.phishing import MODEL as PHISHING_MODEL
 log = logging.getLogger("taigabot.automod")
 
 INVITE_RE = re.compile(r"(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)", re.I)
+
+# ── personal-contact / solicitation filter ────────────────────────────────
+# Blocks the common shapes of solicitation: sharing personal contact info
+# (phone/email), payment handles, and "reach me off-server" pitches. Tuned for
+# precision so ordinary chat isn't caught.
+#
+# Phone: optional +country code then a 10-digit number with common separators.
+# The digit boundaries stop it matching inside long ID strings (e.g. 17-19-digit
+# Discord snowflakes or order numbers).
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"
+)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Payment handles are almost always solicitation in a club chat.
+_PAYMENT_RE = re.compile(
+    r"\b(cash\s?app|\$[A-Za-z][A-Za-z0-9]{2,}|venmo|zelle|paypal(?:\.me)?|wire\s+transfer)\b",
+    re.I,
+)
+# Off-platform solicitation: an external messenger named alongside a "<verb> me"
+# pitch (requiring the "me/us" object keeps ordinary mentions from tripping it).
+_PLATFORM_RE = re.compile(
+    r"\b(whats\s?app|telegram|signal\s+(?:me|app|group)|snapchat|kik|wechat)\b", re.I
+)
+_SOLICIT_VERB_RE = re.compile(
+    r"\b(?:dm|pm|text|call|contact|reach|add|message|msg|ping)\s+(?:me|us)\b"
+    r"|\bhmu\b|\bhit\s+me\s+up\b|\binbox\s+me\b",
+    re.I,
+)
+
+
+def _contact_reason(content: str) -> str | None:
+    """Return a short reason if `content` shares contact info / solicits, else None."""
+    if _PHONE_RE.search(content):
+        return "sharing personal phone numbers isn't allowed here."
+    if _EMAIL_RE.search(content):
+        return "sharing personal email addresses isn't allowed here."
+    if _PAYMENT_RE.search(content):
+        return "soliciting payments or money transfers isn't allowed here."
+    if _PLATFORM_RE.search(content) and _SOLICIT_VERB_RE.search(content):
+        return "soliciting people to contact you off-server isn't allowed here."
+    return None
 MAX_MENTIONS = 10  # delete messages with MORE than this many user+role pings (mention-bomb guard)
 SPAM_WINDOW_SEC = 7
 SPAM_THRESHOLD = 5  # messages within window
@@ -67,6 +108,79 @@ class Moderation(commands.Cog):
         # (guild_id, user_id) -> count of auto-warns this session (drives the
         # "DM Eboard every Nth" escalation, independent of manual warns/clears)
         self._autowarn_count: dict[tuple[int, int], int] = {}
+
+    # ── deleted-message audit log ─────────────────────────────────────────
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message):
+        """Post an audit entry to the mod-log when a message is deleted.
+
+        The content comes from discord.py's in-memory message cache, so this adds
+        no storage and no extra RAM (the cache is already on). It therefore fires
+        only for messages still in the cache — i.e. recently-posted ones, which
+        are the ones that actually get deleted. Who deleted the message is NOT in
+        the gateway event, so we read it from the guild's audit log (requires the
+        bot's "View Audit Log" permission). Discord writes NO audit entry when a
+        user deletes their own message, so an unmatched delete is reported as a
+        self-delete.
+        """
+        if message.guild is None or message.author.bot:
+            return
+
+        content = message.content or ""
+        attachments = ", ".join(a.filename for a in message.attachments)
+        deleter = await self._who_deleted(message)
+
+        embed = discord.Embed(
+            title="🗑️ Message Deleted",
+            color=discord.Color.dark_red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="Sent by",
+            value=f"{message.author.mention} ({message.author} · `{message.author.id}`)",
+            inline=False,
+        )
+        if deleter is not None and deleter.id != message.author.id:
+            deleted_by = f"{deleter.mention} ({deleter} · `{deleter.id}`)"
+        else:
+            deleted_by = f"{message.author.mention} (self-delete or unknown)"
+        embed.add_field(name="Deleted by", value=deleted_by, inline=False)
+        embed.add_field(name="Channel", value=message.channel.mention, inline=False)
+        embed.add_field(
+            name="Content", value=(content[:1024] if content else "*(no text)*"), inline=False
+        )
+        if attachments:
+            embed.add_field(name="Attachments", value=attachments[:1024], inline=False)
+
+        await gu.log_mod_action(message.guild, embed)
+
+    async def _who_deleted(self, message: discord.Message):
+        """Best-effort: who deleted `message`, from the guild audit log.
+
+        Returns the deleter, or None when we can't tell (usually a self-delete —
+        Discord logs no entry for those). Delete entries are batched by Discord,
+        so we match on author + channel within a short recency window.
+        """
+        guild = message.guild
+        me = guild.me
+        if me is None or not me.guild_permissions.view_audit_log:
+            return None
+        try:
+            async for entry in guild.audit_logs(
+                limit=5, action=discord.AuditLogAction.message_delete
+            ):
+                extra_channel = getattr(entry.extra, "channel", None)
+                if (
+                    entry.target is not None
+                    and entry.target.id == message.author.id
+                    and extra_channel is not None
+                    and extra_channel.id == message.channel.id
+                    and (discord.utils.utcnow() - entry.created_at).total_seconds() < 15
+                ):
+                    return entry.user
+        except discord.Forbidden:
+            pass
+        return None
 
     # ── automod listener ──────────────────────────────────────────────────
     @commands.Cog.listener()
@@ -138,6 +252,14 @@ class Moderation(commands.Cog):
                         label="posting a suspected phishing/scam message",
                         escalate_every=1,
                     )
+                return
+
+        # personal contact info / solicitation — blocks phone numbers, emails,
+        # payment handles, and "reach me off-server" pitches to curb solicitation.
+        if settings["filter_contact"] and content.strip():
+            reason = _contact_reason(content)
+            if reason:
+                await punish(reason)
                 return
 
         # mass mentions — guards against mention bombing. Covers @everyone/@here
@@ -217,6 +339,7 @@ class Moderation(commands.Cog):
         "mentions": "filter_mentions",
         "caps": "filter_caps",
         "phishing": "filter_phishing",
+        "contact": "filter_contact",
     }
 
     @automod.command(name="enable", description="Enable automod, or one specific filter.")
@@ -269,6 +392,7 @@ class Moderation(commands.Cog):
         if PHISHING_MODEL is None:
             phishing_state += " ⚠️ *(model not loaded)*"
         embed.add_field(name="Phishing/scam", value=phishing_state)
+        embed.add_field(name="Contact/solicitation", value=onoff(s["filter_contact"]))
         embed.add_field(
             name=f"Banned word list ({len(words)})",
             value=", ".join(f"`{w}`" for w in words) if words else "*(empty)*",

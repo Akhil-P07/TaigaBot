@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     filter_mentions  INTEGER NOT NULL DEFAULT 1,
     filter_caps      INTEGER NOT NULL DEFAULT 0,
     filter_phishing  INTEGER NOT NULL DEFAULT 1,
+    filter_contact   INTEGER NOT NULL DEFAULT 1,
     levels_enabled   INTEGER NOT NULL DEFAULT 1
 );
 
@@ -104,6 +105,7 @@ DEFAULT_SETTINGS = {
     "filter_mentions": 1,
     "filter_caps": 0,
     "filter_phishing": 1,
+    "filter_contact": 1,
     "levels_enabled": 1,
 }
 
@@ -146,6 +148,13 @@ class Database:
         if gcols and "filter_phishing" not in gcols:
             await self.conn.execute(
                 "ALTER TABLE guild_settings ADD COLUMN filter_phishing INTEGER NOT NULL DEFAULT 1"
+            )
+            await self.conn.commit()
+
+        # Personal-contact / solicitation filter toggle (added later).
+        if gcols and "filter_contact" not in gcols:
+            await self.conn.execute(
+                "ALTER TABLE guild_settings ADD COLUMN filter_contact INTEGER NOT NULL DEFAULT 1"
             )
             await self.conn.commit()
 

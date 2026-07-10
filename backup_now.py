@@ -42,7 +42,7 @@ async def _backup(client: discord.Client, db: database.Database, guild: discord.
         await channel.send(
             content=(
                 f"🗄️ Manual backup for **{guild.name}** — {ts} "
-                f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified/admin member(s))"
+                f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified member(s))"
             ),
             files=[discord.File(p, filename=n) for p, n in files_meta],
         )
