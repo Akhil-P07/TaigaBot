@@ -28,7 +28,7 @@ everywhere) and their verification status (see the verification note below).
 |---|---|---|
 | **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard) |
-| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword` (filters: words, invites, spam, mentions, caps, phishing, contact), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard); deleted-message audit log to `#mod-log` |
+| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword\|exempt\|unexempt` (filters: words, invites, spam, mentions, caps, phishing, contact), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard); deleted-message audit log to `#mod-log` |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
@@ -185,6 +185,10 @@ A lightweight project directory with self-service joining.
 - **`/projects [tag]`** — browse all projects; includes a **scrollable tag
   dropdown** to filter without typing.
 - **`/projecttags`** — list every tag and how many projects use it.
+- **`/deletetag [tag]`** (Eboard) — remove a tag from every project. Run it
+  blank for a dropdown picker; the picker re-reads the database after every
+  deletion, so you can clear several tags in one sitting and never see a
+  stale option.
 - **`/joinproject [tag]`** — anyone picks a project from a dropdown and requests to
   join. **Every lead gets a DM** with Approve/Deny buttons (which survive
   restarts); any lead can decide (first to act wins). On approval the role is
@@ -247,7 +251,15 @@ dataset (1,830 labelled Discord messages).
 - **Tsundere lines** — [`personality.py`](personality.py); set `ENABLED = False`
   for a plain bot.
 - **Email domains / role & channel names / OTP timeout / Gemini model** — `.env`.
-- **Banned words** — live via `/automod addword` (per-server).
+- **Banned words** — live via `/automod addword` / `/automod removeword`
+  (per-server). Both take comma-separated lists to add or remove several at
+  once (lowercased, trimmed, deduped).
+- **Automod exemptions** — `/automod exempt target:#channel-or-category
+  [filter]` turns off one filter (or all of automod, the default) in that
+  place: a category covers every channel and thread inside it, and a channel's
+  exemption covers its threads. `/automod unexempt` reverses it, and
+  `/automod status` lists exemptions grouped by filter. Exemptions are stored
+  per-server and included in backups.
 - **Spam thresholds & auto-warn** — constants at the top of
   [`features/moderation.py`](features/moderation.py) (`SPAM_*`, `AUTOWARN_*`).
   Caught spammers are auto-warned; the Eboard is DMed only once a user hits

@@ -463,7 +463,8 @@ def _landing_html(bot) -> str:
         students-only. Verify once, recognized across every server running the bot,
         and recover your status on a new account with <code>/recover</code>.</p></div>
       <div class="card"><h3>🛡️ Moderation</h3><p>Automod with spam auto-warns, an
-        on-device ML phishing/scam filter, and a contact-info/solicitation filter,
+        on-device ML phishing/scam filter, and a contact-info/solicitation filter —
+        with per-channel/category exemptions when a filter shouldn't run somewhere —
         plus kick / ban / timeout / warn tools for your Eboard, a deleted-message
         audit log (who sent it, who deleted it), and an anonymous cross-server
         repeat-offender check (a count only, no names).</p></div>

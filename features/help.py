@@ -114,8 +114,11 @@ class Help(commands.Cog):
                 value=(
                     "`/automod enable|disable [filter]` — toggle automod or one filter\n"
                     "  *filters:* `words` `invites` `spam` `mentions` `caps` `phishing` `contact`\n"
-                    "`/automod status` — show current settings\n"
-                    "`/automod addword|removeword word` — manage banned words\n"
+                    "`/automod status` — show current settings & exemptions\n"
+                    "`/automod addword|removeword word` — manage banned words "
+                    "(comma-separate to do several at once)\n"
+                    "`/automod exempt|unexempt target [filter]` — skip automod (or one "
+                    "filter) in a channel/category (covers its threads/channels)\n"
                     "🛡️ *Phishing/scam detection uses an on-device ML model — no data leaves the bot.*"
                 ),
                 inline=False,
