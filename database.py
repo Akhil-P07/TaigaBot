@@ -8,6 +8,7 @@ Tables
 verified_users  : one row per verified member (discord id, name, email)
 guild_settings  : per-guild automod toggles
 banned_words    : per-guild banned word list (automod)
+automod_exempt  : per-guild channel/category exemptions for automod filters
 levels          : per-user XP / level (GLOBAL — shared across all guilds)
 warnings        : moderation warnings issued by Eboard
 reaction_roles  : emoji -> role bindings on specific messages
@@ -47,6 +48,20 @@ CREATE TABLE IF NOT EXISTS banned_words (
     guild_id INTEGER NOT NULL,
     word     TEXT    NOT NULL,
     PRIMARY KEY (guild_id, word)
+);
+
+-- Channel/category gating for automod: a filter can be exempted in specific
+-- channels or categories (e.g. let #memes bypass caps/spam). `filter` holds the
+-- setting column it exempts (e.g. 'filter_caps') or the sentinel 'all' to skip
+-- every filter there. `target_id` is a channel OR category id; `target_type`
+-- ('channel'/'category') is kept only so status output reads well after the
+-- channel is deleted.
+CREATE TABLE IF NOT EXISTS automod_exempt (
+    guild_id    INTEGER NOT NULL,
+    filter      TEXT    NOT NULL,
+    target_id   INTEGER NOT NULL,
+    target_type TEXT    NOT NULL DEFAULT 'channel',
+    PRIMARY KEY (guild_id, filter, target_id)
 );
 
 CREATE TABLE IF NOT EXISTS levels (
@@ -240,7 +255,7 @@ class Database:
     # Every table is scoped by this column, so a per-guild export is just a
     # filtered copy of each one.
     _GUILD_TABLES = (
-        "verified_users", "guild_settings", "banned_words",
+        "verified_users", "guild_settings", "banned_words", "automod_exempt",
         "warnings", "reaction_roles",
         "projects", "project_requests",
     )
@@ -416,6 +431,51 @@ class Database:
             "SELECT word FROM banned_words WHERE guild_id = ?", (guild_id,)
         )
         return [r["word"] for r in await cur.fetchall()]
+
+    # ── automod channel/category gating ───────────────────────────────────
+    async def add_automod_exemption(
+        self, guild_id: int, filter_key: str, target_id: int, target_type: str
+    ) -> None:
+        async with self._tx():
+            await self.conn.execute(
+                """INSERT OR REPLACE INTO automod_exempt
+                   (guild_id, filter, target_id, target_type) VALUES (?, ?, ?, ?)""",
+                (guild_id, filter_key, target_id, target_type),
+            )
+
+    async def remove_automod_exemption(
+        self, guild_id: int, filter_key: str, target_id: int
+    ) -> int:
+        """Delete one exemption. Returns the number of rows removed (0 if it
+        wasn't exempt)."""
+        async with self._tx():
+            cur = await self.conn.execute(
+                "DELETE FROM automod_exempt "
+                "WHERE guild_id = ? AND filter = ? AND target_id = ?",
+                (guild_id, filter_key, target_id),
+            )
+        return cur.rowcount
+
+    async def get_automod_exemptions(self, guild_id: int) -> dict[str, set[int]]:
+        """Runtime lookup: {filter_key: {exempt channel/category ids}}. Read once
+        per message, so it stays small and cheap."""
+        cur = await self.conn.execute(
+            "SELECT filter, target_id FROM automod_exempt WHERE guild_id = ?",
+            (guild_id,),
+        )
+        out: dict[str, set[int]] = {}
+        for r in await cur.fetchall():
+            out.setdefault(r["filter"], set()).add(r["target_id"])
+        return out
+
+    async def list_automod_exemptions(self, guild_id: int) -> list[aiosqlite.Row]:
+        """Full rows (filter, target_id, target_type) for the status display."""
+        cur = await self.conn.execute(
+            "SELECT filter, target_id, target_type FROM automod_exempt "
+            "WHERE guild_id = ? ORDER BY filter",
+            (guild_id,),
+        )
+        return await cur.fetchall()
 
     # ── levels / XP (global — shared across all guilds) ─────────────────────
     async def get_level_row(self, user_id: int) -> aiosqlite.Row | None:

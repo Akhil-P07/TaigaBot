@@ -11,6 +11,11 @@ Automod (toggle each filter on/off with /automod):
                       ML model (trained offline; see utils/phishing.py), then
                       auto-warns the offender and alerts the Eboard
 
+Channel/category gating: /automod exempt (and /automod unexempt) let the Eboard
+turn a filter — or all of automod — off in a specific channel or category (a
+category covers every channel and thread inside it). Exemptions show in
+/automod status.
+
 Moderation commands (Eboard role only): /kick /ban /timeout /warn /warnings
 /clearwarnings /purge. Every command checks the caller's role via is_eboard().
 """
@@ -20,6 +25,7 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
+from typing import Union
 
 import discord
 from discord import app_commands
@@ -93,6 +99,17 @@ AUTOWARN_COOLDOWN_SEC = 60
 # warnings, and then only every this-many afterwards (e.g. at 3, 6, 9, …) so the
 # Eboard's DMs are never flooded by a single repeat offender.
 SPAM_WARN_ESCALATE = 3
+
+# Channels/categories the Eboard can point /automod exempt at. A category id
+# exempts every channel (and thread) inside it; a thread is covered by an
+# exemption on its parent channel or category (handled in _scope_ids).
+GatedTarget = Union[
+    discord.TextChannel,
+    discord.VoiceChannel,
+    discord.CategoryChannel,
+    discord.ForumChannel,
+    discord.StageChannel,
+]
 
 
 class Moderation(commands.Cog):
@@ -198,6 +215,19 @@ class Moderation(commands.Cog):
         if not settings["automod_enabled"]:
             return
 
+        # Channel/category gating: a filter can be exempted in specific channels
+        # or categories (e.g. let #memes bypass caps/spam). Read once per message.
+        exemptions = await self.bot.db.get_automod_exemptions(message.guild.id)
+        scope_ids = self._scope_ids(message.channel) if exemptions else frozenset()
+        # "all" exempts the whole automod system for this channel/category.
+        if exemptions.get("all", ()) and (exemptions["all"] & scope_ids):
+            return
+
+        def gated(filter_key: str) -> bool:
+            """True if this filter is exempt in the message's channel/category."""
+            ids = exemptions.get(filter_key)
+            return bool(ids and (ids & scope_ids))
+
         content = message.content
         lowered = content.lower()
 
@@ -227,14 +257,14 @@ class Moderation(commands.Cog):
             await announce(reason)
 
         # banned words
-        if settings["filter_words"]:
+        if settings["filter_words"] and not gated("filter_words"):
             words = await self.bot.db.get_banned_words(message.guild.id)
             if any(w in lowered for w in words):
                 await punish("that message contained a banned word.")
                 return
 
         # invite links
-        if settings["filter_invites"] and INVITE_RE.search(content):
+        if settings["filter_invites"] and not gated("filter_invites") and INVITE_RE.search(content):
             await punish("posting invite links isn't allowed here.")
             return
 
@@ -242,7 +272,12 @@ class Moderation(commands.Cog):
         # phishing dataset; see utils/phishing.py) scores the message. Tuned for
         # precision so legit chatter isn't deleted. Escalates to the Eboard on
         # every hit (scams are rarer and more serious than rate-spam).
-        if settings["filter_phishing"] and PHISHING_MODEL is not None and content.strip():
+        if (
+            settings["filter_phishing"]
+            and not gated("filter_phishing")
+            and PHISHING_MODEL is not None
+            and content.strip()
+        ):
             if PHISHING_MODEL.is_phishing(content):
                 await punish("that message looks like a phishing or scam link.")
                 if AUTOWARN_SPAM:
@@ -256,7 +291,7 @@ class Moderation(commands.Cog):
 
         # personal contact info / solicitation — blocks phone numbers, emails,
         # payment handles, and "reach me off-server" pitches to curb solicitation.
-        if settings["filter_contact"] and content.strip():
+        if settings["filter_contact"] and not gated("filter_contact") and content.strip():
             reason = _contact_reason(content)
             if reason:
                 await punish(reason)
@@ -266,7 +301,7 @@ class Moderation(commands.Cog):
         # (not counted in message.mentions) and too many pings. Uses raw_* counts,
         # which include REPEATS of the same user/role (message.mentions dedupes,
         # so 20x @same-person would otherwise read as 1).
-        if settings["filter_mentions"]:
+        if settings["filter_mentions"] and not gated("filter_mentions"):
             if message.mention_everyone:
                 await punish("please don't ping @everyone or @here.")
                 return
@@ -276,14 +311,14 @@ class Moderation(commands.Cog):
                 return
 
         # caps
-        if settings["filter_caps"] and len(content) >= CAPS_MIN_LEN:
+        if settings["filter_caps"] and not gated("filter_caps") and len(content) >= CAPS_MIN_LEN:
             letters = [c for c in content if c.isalpha()]
             if letters and sum(c.isupper() for c in letters) / len(letters) > 0.8:
                 await punish("please don't type in all caps.")
                 return
 
         # spam
-        if settings["filter_spam"]:
+        if settings["filter_spam"] and not gated("filter_spam"):
             key = (message.guild.id, message.author.id)
             now = time.time()
 
@@ -326,6 +361,21 @@ class Moderation(commands.Cog):
                     )
                 return
 
+    @staticmethod
+    def _scope_ids(channel: discord.abc.Messageable) -> frozenset[int]:
+        """The ids to test a message's channel against for exemptions: the channel
+        itself, its category, and — for a thread — its parent channel. So an
+        exemption on a category or a parent channel also covers threads inside it.
+        """
+        ids = {channel.id}
+        parent_id = getattr(channel, "parent_id", None)  # threads
+        if parent_id:
+            ids.add(parent_id)
+        category_id = getattr(channel, "category_id", None)
+        if category_id:
+            ids.add(category_id)
+        return frozenset(ids)
+
     # ── automod config (Eboard) ───────────────────────────────────────────
     automod = app_commands.Group(
         name="automod", description="Configure auto-moderation (Eboard only)."
@@ -340,6 +390,17 @@ class Moderation(commands.Cog):
         "caps": "filter_caps",
         "phishing": "filter_phishing",
         "contact": "filter_contact",
+    }
+
+    # Exemptions are stored under the filter's setting column (e.g. "filter_caps"),
+    # except "all" which is its own sentinel meaning "every filter". This maps a
+    # user-facing choice → the stored key, and back for the status display.
+    @classmethod
+    def _exempt_key(cls, choice_value: str) -> str:
+        return "all" if choice_value == "all" else cls._FILTERS[choice_value]
+
+    _EXEMPT_KEY_TO_NAME = {
+        ("all" if k == "all" else v): k for k, v in _FILTERS.items()
     }
 
     @automod.command(name="enable", description="Enable automod, or one specific filter.")
@@ -398,25 +459,152 @@ class Moderation(commands.Cog):
             value=", ".join(f"`{w}`" for w in words) if words else "*(empty)*",
             inline=False,
         )
+
+        # Channel/category exemptions, grouped by filter.
+        ex_rows = await self.bot.db.list_automod_exemptions(interaction.guild_id)
+        if ex_rows:
+            by_filter: dict[str, list[str]] = {}
+            for r in ex_rows:
+                name = self._EXEMPT_KEY_TO_NAME.get(r["filter"], r["filter"])
+                label = self._target_label(
+                    interaction.guild, r["target_id"], r["target_type"]
+                )
+                by_filter.setdefault(name, []).append(label)
+            value = "\n".join(
+                f"`{name}`: {', '.join(labels)}" for name, labels in by_filter.items()
+            )
+        else:
+            value = "*(none)*"
+        embed.add_field(name="Exemptions", value=value[:1024], inline=False)
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @automod.command(name="addword", description="Add a banned word.")
-    @app_commands.describe(word="The word/phrase to ban")
+    @staticmethod
+    def _split_words(raw: str) -> list[str]:
+        """Split a comma-separated word list: lowercase, strip, dedupe (in order).
+        A single entry without commas passes through unchanged, so multi-word
+        phrases still work — commas are the only separator."""
+        out: list[str] = []
+        for w in raw.split(","):
+            w = w.strip().lower()
+            if w and w not in out:
+                out.append(w)
+        return out
+
+    @automod.command(
+        name="addword", description="Add banned words (comma-separate several)."
+    )
+    @app_commands.describe(word="Word/phrase to ban — comma-separate to add several at once")
     @is_eboard()
     async def addword(self, interaction: discord.Interaction, word: str):
-        await self.bot.db.add_banned_word(interaction.guild_id, word)
+        words = self._split_words(word)
+        if not words:
+            await interaction.response.send_message(
+                "Give at least one word to ban, e.g. `/automod addword word:spam, scam`.",
+                ephemeral=True,
+            )
+            return
+        for w in words:
+            await self.bot.db.add_banned_word(interaction.guild_id, w)
+        listed = ", ".join(f"`{w}`" for w in words)
         await interaction.response.send_message(
-            f"✅ Added `{word.lower()}` to the banned list.", ephemeral=True
+            f"✅ Added {listed} to the banned list.", ephemeral=True
         )
 
-    @automod.command(name="removeword", description="Remove a banned word.")
-    @app_commands.describe(word="The word/phrase to unban")
+    @automod.command(
+        name="removeword", description="Remove banned words (comma-separate several)."
+    )
+    @app_commands.describe(word="Word/phrase to unban — comma-separate to remove several at once")
     @is_eboard()
     async def removeword(self, interaction: discord.Interaction, word: str):
-        await self.bot.db.remove_banned_word(interaction.guild_id, word)
+        words = self._split_words(word)
+        if not words:
+            await interaction.response.send_message(
+                "Give at least one word to unban, e.g. `/automod removeword word:spam, scam`.",
+                ephemeral=True,
+            )
+            return
+        for w in words:
+            await self.bot.db.remove_banned_word(interaction.guild_id, w)
+        listed = ", ".join(f"`{w}`" for w in words)
         await interaction.response.send_message(
-            f"✅ Removed `{word.lower()}` from the banned list.", ephemeral=True
+            f"✅ Removed {listed} from the banned list.", ephemeral=True
         )
+
+    # ── channel/category gating (Eboard) ──────────────────────────────────
+    @staticmethod
+    def _target_label(guild: discord.Guild, target_id: int, target_type: str) -> str:
+        """Human label for an exemption target. Resolves the current channel so
+        renames show correctly; falls back to the id if it's since been deleted."""
+        obj = guild.get_channel(target_id)
+        if obj is None:
+            return f"`{target_id}` (deleted {target_type})"
+        if target_type == "category":
+            return f"📁 **{obj.name}**"
+        return obj.mention
+
+    @automod.command(
+        name="exempt",
+        description="Exempt a channel or category from a filter (default: all filters).",
+    )
+    @app_commands.describe(
+        target="Channel or category where the filter should NOT run",
+        filter="Which filter to skip there (default: all)",
+    )
+    @app_commands.choices(
+        filter=[app_commands.Choice(name=k, value=k) for k in _FILTERS]
+    )
+    @is_eboard()
+    async def automod_exempt(
+        self,
+        interaction: discord.Interaction,
+        target: GatedTarget,
+        filter: app_commands.Choice[str] | None = None,
+    ):
+        choice = filter.value if filter else "all"
+        key = self._exempt_key(choice)
+        ttype = "category" if isinstance(target, discord.CategoryChannel) else "channel"
+        await self.bot.db.add_automod_exemption(
+            interaction.guild_id, key, target.id, ttype
+        )
+        label = self._target_label(interaction.guild, target.id, ttype)
+        scope = "all automod filters" if choice == "all" else f"the `{choice}` filter"
+        note = " (and every channel in it)" if ttype == "category" else ""
+        await interaction.response.send_message(
+            f"✅ {label}{note} is now exempt from {scope}.", ephemeral=True
+        )
+
+    @automod.command(
+        name="unexempt",
+        description="Remove a channel/category exemption (default: all filters).",
+    )
+    @app_commands.describe(
+        target="Channel or category to stop exempting",
+        filter="Which filter's exemption to remove (default: all)",
+    )
+    @app_commands.choices(
+        filter=[app_commands.Choice(name=k, value=k) for k in _FILTERS]
+    )
+    @is_eboard()
+    async def automod_unexempt(
+        self,
+        interaction: discord.Interaction,
+        target: GatedTarget,
+        filter: app_commands.Choice[str] | None = None,
+    ):
+        choice = filter.value if filter else "all"
+        key = self._exempt_key(choice)
+        removed = await self.bot.db.remove_automod_exemption(
+            interaction.guild_id, key, target.id
+        )
+        ttype = "category" if isinstance(target, discord.CategoryChannel) else "channel"
+        label = self._target_label(interaction.guild, target.id, ttype)
+        scope = "all automod filters" if choice == "all" else f"the `{choice}` filter"
+        if removed:
+            msg = f"✅ {label} is no longer exempt from {scope}."
+        else:
+            msg = f"ℹ️ {label} wasn't exempt from {scope}."
+        await interaction.response.send_message(msg, ephemeral=True)
 
     # ── moderation commands (Eboard) ──────────────────────────────────────
     @staticmethod

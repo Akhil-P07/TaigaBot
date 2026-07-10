@@ -893,7 +893,15 @@ class _TagSelect(discord.ui.Select):
         tag = None if self.values[0] == ALL_TAGS_SENTINEL else self.values[0]
         rows = await interaction.client.db.list_projects(interaction.guild_id, tag=tag)
         embed = _build_projects_embed(interaction.guild, rows, tag)
-        await interaction.response.edit_message(embed=embed, view=self.view)
+        # Rebuild the dropdown from the CURRENT tag list. The options were baked
+        # in when the message was posted, so a tag deleted since (/deletetag) or
+        # added since would otherwise keep showing / stay missing here.
+        all_rows = await interaction.client.db.list_projects(interaction.guild_id)
+        if self.view is not None:
+            self.view.stop()
+        await interaction.response.edit_message(
+            embed=embed, view=_TagFilterView(_distinct_tags(all_rows))
+        )
 
 
 class _TagFilterView(discord.ui.View):
@@ -1544,7 +1552,10 @@ class Projects(commands.Cog):
 
         if not affected:
             await interaction.followup.send(
-                f"No projects use the tag `#{target}`. See current tags with `/projecttags`.",
+                f"`#{target}` isn't on any project — tags only live on projects, so "
+                f"it's already gone from the database. If an older dropdown still "
+                f"lists it, that message is just stale; re-run `/projects` or "
+                f"`/deletetag` for a current list.",
                 ephemeral=True,
             )
             return
@@ -1584,6 +1595,8 @@ class Projects(commands.Cog):
 
         # No tag given: show a dropdown of every existing tag — the same list the
         # /projects filter shows — so picking one removes it from there too.
+        # The picker is REBUILT from the DB after every deletion, so its options
+        # never go stale and several tags can be deleted in one sitting.
         tags = _distinct_tags(await self.bot.db.list_projects(interaction.guild_id))
         if not tags:
             await interaction.response.send_message(
@@ -1593,17 +1606,40 @@ class Projects(commands.Cog):
             )
             return
 
-        view = _DeleteTagView(tags)
-        await interaction.response.send_message(
+        prompt = (
             "**Delete a tag**\nPick the tag to strip from every project that uses "
-            "it — it'll also drop out of the `/projects` filter dropdown.",
-            view=view,
-            ephemeral=True,
+            "it — it'll also drop out of the `/projects` filter dropdown."
         )
-        await view.wait()
-        if not view.confirmed or view.tag is None:
-            return
-        await self._apply_tag_deletion(interaction, view.tag)
+        view = _DeleteTagView(tags)
+        await interaction.response.send_message(prompt, view=view, ephemeral=True)
+
+        while True:
+            timed_out = await view.wait()
+            if timed_out:
+                # Grey out the dead components so the stale picker can't be
+                # mistaken for a live one.
+                for item in view.children:
+                    item.disabled = True
+                try:
+                    await interaction.edit_original_response(
+                        content="⏰ Timed out — run `/deletetag` again.", view=view
+                    )
+                except discord.HTTPException:
+                    pass
+                return
+            if not view.confirmed or view.tag is None:  # cancelled
+                return
+            await self._apply_tag_deletion(interaction, view.tag)
+
+            # Refresh the picker from what's left so it always mirrors the DB.
+            tags = _distinct_tags(await self.bot.db.list_projects(interaction.guild_id))
+            if not tags:
+                await interaction.edit_original_response(
+                    content="🏷️ That was the last tag — none left to delete.", view=None
+                )
+                return
+            view = _DeleteTagView(tags)
+            await interaction.edit_original_response(content=prompt, view=view)
 
 
 async def setup(bot: commands.Bot) -> None:
