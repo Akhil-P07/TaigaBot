@@ -21,6 +21,7 @@ Moderation commands (Eboard role only): /kick /ban /timeout /warn /warnings
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -125,6 +126,14 @@ class Moderation(commands.Cog):
         # (guild_id, user_id) -> count of auto-warns this session (drives the
         # "DM Eboard every Nth" escalation, independent of manual warns/clears)
         self._autowarn_count: dict[tuple[int, int], int] = {}
+        # Message ids the bot itself is deleting (automod punish / bulk delete),
+        # so on_message_delete can skip them — automod posts its own log entry.
+        self._bot_deleted: set[int] = set()
+        # audit-log entry id -> last seen delete count. Discord batches repeat
+        # deletes (same mod, same author, same channel) into ONE audit entry by
+        # bumping its count without touching created_at, so a count bump is the
+        # only signal that a mod deleted *another* message.
+        self._audit_delete_counts: dict[int, int] = {}
 
     # ── deleted-message audit log ─────────────────────────────────────────
     @commands.Cog.listener()
@@ -142,10 +151,19 @@ class Moderation(commands.Cog):
         """
         if message.guild is None or message.author.bot:
             return
+        # Deleted by TaigaBot itself (automod punish / bulk delete): automod
+        # already posts its own mod-log entry, so skip the audit embed.
+        if message.id in self._bot_deleted:
+            self._bot_deleted.discard(message.id)
+            return
 
         content = message.content or ""
         attachments = ", ".join(a.filename for a in message.attachments)
         deleter = await self._who_deleted(message)
+        # Backstop for bot deletions not marked above (e.g. /purge falling back
+        # to per-message deletes) — those get their own confirmation already.
+        if deleter is not None and deleter.id == self.bot.user.id:
+            return
 
         embed = discord.Embed(
             title="🗑️ Message Deleted",
@@ -175,25 +193,44 @@ class Moderation(commands.Cog):
         """Best-effort: who deleted `message`, from the guild audit log.
 
         Returns the deleter, or None when we can't tell (usually a self-delete —
-        Discord logs no entry for those). Delete entries are batched by Discord,
-        so we match on author + channel within a short recency window.
+        Discord logs no entry for those). Two Discord quirks handled here:
+
+        • The audit entry is written slightly AFTER the gateway delete event, so
+          querying immediately finds nothing and every delete looks like a
+          self-delete — hence the sleep before reading.
+        • Repeat deletes (same mod, same author, same channel) are batched into
+          ONE entry whose count is bumped without touching created_at, so a
+          recency check alone matches only the first delete. We remember each
+          entry's last seen count; a bump means the mod deleted another message.
         """
         guild = message.guild
         me = guild.me
         if me is None or not me.guild_permissions.view_audit_log:
             return None
+        await asyncio.sleep(2)
         try:
             async for entry in guild.audit_logs(
-                limit=5, action=discord.AuditLogAction.message_delete
+                limit=10, action=discord.AuditLogAction.message_delete
             ):
                 extra_channel = getattr(entry.extra, "channel", None)
                 if (
-                    entry.target is not None
-                    and entry.target.id == message.author.id
-                    and extra_channel is not None
-                    and extra_channel.id == message.channel.id
-                    and (discord.utils.utcnow() - entry.created_at).total_seconds() < 15
+                    entry.target is None
+                    or entry.target.id != message.author.id
+                    or extra_channel is None
+                    or extra_channel.id != message.channel.id
                 ):
+                    continue
+                count = getattr(entry.extra, "count", 1) or 1
+                seen = self._audit_delete_counts.get(entry.id)
+                self._audit_delete_counts[entry.id] = count
+                if len(self._audit_delete_counts) > 200:
+                    # Entry ids are snowflakes (time-ordered): drop the oldest.
+                    for old_id in sorted(self._audit_delete_counts)[:-100]:
+                        del self._audit_delete_counts[old_id]
+                if seen is None:
+                    if (discord.utils.utcnow() - entry.created_at).total_seconds() < 60:
+                        return entry.user
+                elif count > seen:
                     return entry.user
         except discord.Forbidden:
             pass
@@ -250,9 +287,11 @@ class Moderation(commands.Cog):
             await gu.log_mod_action(message.guild, embed)
 
         async def punish(reason: str):
+            self._bot_deleted.add(message.id)
             try:
                 await message.delete()
             except discord.HTTPException:
+                self._bot_deleted.discard(message.id)
                 return
             await announce(reason)
 
@@ -884,8 +923,7 @@ class Moderation(commands.Cog):
         # Always mirror to #mod-log so it lands even if Eboard DMs are closed.
         await gu.log_mod_action(guild, embed)
 
-    @staticmethod
-    async def _bulk_delete(channel: discord.abc.Messageable, messages: list) -> None:
+    async def _bulk_delete(self, channel: discord.abc.Messageable, messages: list) -> None:
         """Delete a batch of messages best-effort.
 
         Tries the bulk endpoint first (one API call for the whole burst), then
@@ -894,6 +932,11 @@ class Moderation(commands.Cog):
         are ignored."""
         if not messages:
             return
+        # Mark them ours so on_message_delete skips the audit embed (automod
+        # posts its own notice). Stale ids are pruned by the size cap below.
+        self._bot_deleted.update(m.id for m in messages)
+        if len(self._bot_deleted) > 1000:
+            self._bot_deleted = set(sorted(self._bot_deleted)[-500:])
         try:
             await channel.delete_messages(messages)
             return
