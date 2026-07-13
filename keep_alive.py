@@ -101,6 +101,7 @@ INVITE_PERMISSIONS = discord.Permissions(
     embed_links=True,
     read_message_history=True,
     add_reactions=True,
+    bypass_slowmode=True,
 )
 
 
