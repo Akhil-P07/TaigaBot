@@ -60,9 +60,7 @@ py -m pip install -r requirements.txt
 4. To run on servers other than your own, enable **Public Bot**. (Discord requires
    app verification past **100 servers** to keep the privileged intents.)
 5. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`; bot
-   permissions: *Manage Roles, Manage Channels, **View Channels**, **Use
-   Application Commands**, Kick, Ban, Moderate Members, Manage Messages, Send
-   Messages, Add Reactions, Embed Links, Read Message History*. Open/share the URL
+   permissions: *View Audit Log, Manage Roles, Manage Channels, Kick, Ban, View Channels, Moderate Members, Send Messages, Manage Messages, Embed Links,  Read Message History, Add Reactions, Use Slash Commands, Bypass Slowmode*. Open/share the URL
    to invite the bot.
 
    > **View Channels** and **Use Application Commands** are easy to miss but
