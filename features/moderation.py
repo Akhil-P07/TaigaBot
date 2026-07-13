@@ -127,7 +127,7 @@ class Moderation(commands.Cog):
         # "DM Eboard every Nth" escalation, independent of manual warns/clears)
         self._autowarn_count: dict[tuple[int, int], int] = {}
         # Message ids the bot itself is deleting (automod punish / bulk delete),
-        # so on_message_delete can skip them — automod posts its own log entry.
+        # so on_raw_message_delete can skip them — automod posts its own log entry.
         self._bot_deleted: set[int] = set()
         # audit-log entry id -> last seen delete count. Discord batches repeat
         # deletes (same mod, same author, same channel) into ONE audit entry by
@@ -137,63 +137,103 @@ class Moderation(commands.Cog):
 
     # ── deleted-message audit log ─────────────────────────────────────────
     @commands.Cog.listener()
-    async def on_message_delete(self, message: discord.Message):
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
         """Post an audit entry to the mod-log when a message is deleted.
 
-        The content comes from discord.py's in-memory message cache, so this adds
-        no storage and no extra RAM (the cache is already on). It therefore fires
-        only for messages still in the cache — i.e. recently-posted ones, which
-        are the ones that actually get deleted. Who deleted the message is NOT in
-        the gateway event, so we read it from the guild's audit log (requires the
-        bot's "View Audit Log" permission). Discord writes NO audit entry when a
-        user deletes their own message, so an unmatched delete is reported as a
-        self-delete.
+        Raw event, so it fires for EVERY delete — the non-raw on_message_delete
+        only fires for messages still in discord.py's in-memory cache, which
+        silently dropped exactly the deletes mods care about (anything posted
+        before the last restart or pushed out of the ~1000-message cache).
+        The cached message, when still available, supplies author and content.
+        Who deleted the message is NOT in the gateway event, so we read it from
+        the guild's audit log (requires the bot's "View Audit Log" permission);
+        for an uncached message the audit entry also supplies the author.
+        Discord writes NO audit entry when a user deletes their own message, so
+        an unmatched delete is a self-delete — for an uncached message that
+        leaves nothing worth logging (no author, content, or deleter), so those
+        are skipped.
         """
-        if message.guild is None or message.author.bot:
+        if payload.guild_id is None:
+            return
+        guild = self.bot.get_guild(payload.guild_id)
+        if guild is None:
             return
         # Deleted by TaigaBot itself (automod punish / bulk delete): automod
         # already posts its own mod-log entry, so skip the audit embed.
-        if message.id in self._bot_deleted:
-            self._bot_deleted.discard(message.id)
+        if payload.message_id in self._bot_deleted:
+            self._bot_deleted.discard(payload.message_id)
+            return
+        message = payload.cached_message
+        if message is not None and message.author.bot:
             return
 
-        content = message.content or ""
-        attachments = ", ".join(a.filename for a in message.attachments)
-        deleter = await self._who_deleted(message)
+        author = message.author if message is not None else None
+        entry = await self._who_deleted(
+            guild, payload.channel_id, author.id if author is not None else None
+        )
+        deleter = entry.user if entry is not None else None
         # Backstop for bot deletions not marked above (e.g. /purge falling back
         # to per-message deletes) — those get their own confirmation already.
         if deleter is not None and deleter.id == self.bot.user.id:
             return
+        if author is None:
+            if entry is None or entry.target is None:
+                # Uncached self-delete: no author, content, or deleter to report.
+                return
+            # The audit entry's target is the deleted message's author.
+            target = entry.target
+            author = guild.get_member(target.id) or self.bot.get_user(target.id) or target
+            if getattr(author, "bot", False):
+                return
+
+        def fmt(user) -> str:
+            mention = getattr(user, "mention", f"<@{user.id}>")
+            if isinstance(user, discord.Object):
+                return f"{mention} (`{user.id}`)"
+            return f"{mention} ({user} · `{user.id}`)"
 
         embed = discord.Embed(
             title="🗑️ Message Deleted",
             color=discord.Color.dark_red(),
             timestamp=discord.utils.utcnow(),
         )
+        embed.add_field(name="Sent by", value=fmt(author), inline=False)
+        if deleter is not None and deleter.id != author.id:
+            deleted_by = fmt(deleter)
+        else:
+            deleted_by = f"{getattr(author, 'mention', f'<@{author.id}>')} (self-delete or unknown)"
+        embed.add_field(name="Deleted by", value=deleted_by, inline=False)
+        channel = guild.get_channel(payload.channel_id)
         embed.add_field(
-            name="Sent by",
-            value=f"{message.author.mention} ({message.author} · `{message.author.id}`)",
+            name="Channel",
+            value=channel.mention if channel is not None else f"<#{payload.channel_id}>",
             inline=False,
         )
-        if deleter is not None and deleter.id != message.author.id:
-            deleted_by = f"{deleter.mention} ({deleter} · `{deleter.id}`)"
+        if message is not None:
+            content = message.content or ""
+            embed.add_field(
+                name="Content", value=(content[:1024] if content else "*(no text)*"), inline=False
+            )
+            attachments = ", ".join(a.filename for a in message.attachments)
+            if attachments:
+                embed.add_field(name="Attachments", value=attachments[:1024], inline=False)
         else:
-            deleted_by = f"{message.author.mention} (self-delete or unknown)"
-        embed.add_field(name="Deleted by", value=deleted_by, inline=False)
-        embed.add_field(name="Channel", value=message.channel.mention, inline=False)
-        embed.add_field(
-            name="Content", value=(content[:1024] if content else "*(no text)*"), inline=False
-        )
-        if attachments:
-            embed.add_field(name="Attachments", value=attachments[:1024], inline=False)
+            embed.add_field(
+                name="Content",
+                value="*(unavailable — message predates the bot's cache)*",
+                inline=False,
+            )
 
-        await gu.log_mod_action(message.guild, embed)
+        await gu.log_mod_action(guild, embed)
 
-    async def _who_deleted(self, message: discord.Message):
-        """Best-effort: who deleted `message`, from the guild audit log.
+    async def _who_deleted(self, guild: discord.Guild, channel_id: int, author_id: int | None):
+        """Best-effort: the audit-log entry for a delete in `channel_id`.
 
-        Returns the deleter, or None when we can't tell (usually a self-delete —
-        Discord logs no entry for those). Two Discord quirks handled here:
+        Returns the matching entry (whose .user is the deleter and .target the
+        deleted message's author), or None when we can't tell (usually a
+        self-delete — Discord logs no entry for those). `author_id` narrows the
+        match when the deleted message was cached; None (uncached) matches on
+        channel alone. Two Discord quirks handled here:
 
         • The audit entry is written slightly AFTER the gateway delete event, so
           querying immediately finds nothing and every delete looks like a
@@ -203,7 +243,6 @@ class Moderation(commands.Cog):
           recency check alone matches only the first delete. We remember each
           entry's last seen count; a bump means the mod deleted another message.
         """
-        guild = message.guild
         me = guild.me
         if me is None or not me.guild_permissions.view_audit_log:
             return None
@@ -213,11 +252,10 @@ class Moderation(commands.Cog):
                 limit=10, action=discord.AuditLogAction.message_delete
             ):
                 extra_channel = getattr(entry.extra, "channel", None)
-                if (
-                    entry.target is None
-                    or entry.target.id != message.author.id
-                    or extra_channel is None
-                    or extra_channel.id != message.channel.id
+                if extra_channel is None or extra_channel.id != channel_id:
+                    continue
+                if author_id is not None and (
+                    entry.target is None or entry.target.id != author_id
                 ):
                     continue
                 count = getattr(entry.extra, "count", 1) or 1
@@ -229,9 +267,9 @@ class Moderation(commands.Cog):
                         del self._audit_delete_counts[old_id]
                 if seen is None:
                     if (discord.utils.utcnow() - entry.created_at).total_seconds() < 60:
-                        return entry.user
+                        return entry
                 elif count > seen:
-                    return entry.user
+                    return entry
         except discord.Forbidden:
             pass
         return None
@@ -932,7 +970,7 @@ class Moderation(commands.Cog):
         are ignored."""
         if not messages:
             return
-        # Mark them ours so on_message_delete skips the audit embed (automod
+        # Mark them ours so on_raw_message_delete skips the audit embed (automod
         # posts its own notice). Stale ids are pruned by the size cap below.
         self._bot_deleted.update(m.id for m in messages)
         if len(self._bot_deleted) > 1000:
