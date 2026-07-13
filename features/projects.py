@@ -136,12 +136,26 @@ def _distinct_tags(rows) -> list[str]:
     return sorted(tags)
 
 
+def _projects_cooldown(interaction: discord.Interaction) -> app_commands.Cooldown | None:
+    """/projects rate limit: 3 uses per 5 minutes per member. Eboard (and
+    admins, matching is_eboard()) are exempt — returning None skips the
+    cooldown entirely. CommandOnCooldown is handled centrally in bot.py."""
+    member = interaction.user
+    if isinstance(member, discord.Member) and (
+        member.guild_permissions.administrator
+        or member_has_role(member, config.EBOARD_ROLE_NAME)
+    ):
+        return None
+    return app_commands.Cooldown(3, 300.0)
+
+
 def _build_projects_embed(guild: discord.Guild, rows, tag: str | None) -> discord.Embed:
     embed = discord.Embed(
         title=f"🗂️ Projects{f' — #{tag}' if tag else ''}",
         color=discord.Color(config.BOT_COLOR),
         description=f"{len(rows)} project(s)" + (" found." if tag else "."),
     )
+    shown = 0
     for row in rows[:15]:
         tags_str = _fmt_tags(row["tags"]) if row["tags"] else "—"
         channel = guild.get_channel(row["channel_id"])
@@ -149,17 +163,22 @@ def _build_projects_embed(guild: discord.Guild, rows, tag: str | None) -> discor
         lead_ids = _parse_leads(row)
         leads_str = ", ".join(f"<@{i}>" for i in lead_ids)
         lead_label = "Leads" if len(lead_ids) > 1 else "Lead"
-        embed.add_field(
-            name=row["name"],
-            value=(
-                f"{row['description'][:120]}\n"
-                f"**{lead_label}:** {leads_str} | **Channel:** {ch_ref}\n"
-                f"**Tags:** {tags_str}"
-            ),
-            inline=False,
+        meta = (
+            f"\n**{lead_label}:** {leads_str} | **Channel:** {ch_ref}\n"
+            f"**Tags:** {tags_str}"
         )
-    if len(rows) > 15:
-        embed.set_footer(text=f"Showing 15 of {len(rows)}.")
+        # Full description, bounded only by Discord's hard caps: 1024 chars per
+        # field value and 6000 chars per embed (stop adding fields near it).
+        desc = row["description"] or ""
+        room = 1024 - len(meta)
+        if len(desc) > room:
+            desc = desc[: room - 1] + "…"
+        if len(embed) + len(row["name"]) + len(desc) + len(meta) > 5900:
+            break
+        embed.add_field(name=row["name"], value=desc + meta, inline=False)
+        shown += 1
+    if shown < len(rows):
+        embed.set_footer(text=f"Showing {shown} of {len(rows)}.")
     return embed
 
 
@@ -1460,6 +1479,9 @@ class Projects(commands.Cog):
         description="Browse all projects, optionally filtered by tag.",
     )
     @app_commands.describe(tag="Filter by tag (optional)")
+    @app_commands.checks.dynamic_cooldown(
+        _projects_cooldown, key=lambda i: (i.guild_id, i.user.id)
+    )
     async def projects_list(self, interaction: discord.Interaction, tag: str | None = None):
         all_rows = await self.bot.db.list_projects(interaction.guild_id)
         if not all_rows:
