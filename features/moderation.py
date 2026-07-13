@@ -129,11 +129,23 @@ class Moderation(commands.Cog):
         # Message ids the bot itself is deleting (automod punish / bulk delete),
         # so on_raw_message_delete can skip them — automod posts its own log entry.
         self._bot_deleted: set[int] = set()
-        # audit-log entry id -> last seen delete count. Discord batches repeat
-        # deletes (same mod, same author, same channel) into ONE audit entry by
-        # bumping its count without touching created_at, so a count bump is the
-        # only signal that a mod deleted *another* message.
-        self._audit_delete_counts: dict[int, int] = {}
+        # guild id -> {audit entry id -> attributed delete count}. Discord
+        # batches repeat deletes (same mod, same author, same channel) into ONE
+        # audit entry by bumping its count without touching created_at, so a
+        # count bump is the only signal that a mod deleted *another* message.
+        # Baselined from the live audit log at startup (see
+        # _baseline_audit_counts) because this dict is wiped on restart while
+        # the batched entries persist. Per-guild so pruning one busy guild
+        # can't evict another guild's baselines.
+        self._audit_delete_counts: dict[int, dict[int, int]] = defaultdict(dict)
+        # Guild ids whose existing audit entries have been baselined.
+        self._audit_baselined: set[int] = set()
+        # Per-guild: serializes audit lookups so concurrent deletes each claim
+        # their own count bump instead of the first lookup swallowing the whole
+        # batch. Per-guild so one server's lookups don't stall another's.
+        self._audit_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Guild ids already warned about a missing View Audit Log permission.
+        self._warned_no_audit: set[int] = set()
 
     # ── deleted-message audit log ─────────────────────────────────────────
     @commands.Cog.listener()
@@ -226,6 +238,36 @@ class Moderation(commands.Cog):
 
         await gu.log_mod_action(guild, embed)
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            await self._baseline_audit_counts(guild)
+
+    async def _baseline_audit_counts(self, guild: discord.Guild):
+        """Record the current count of recent message-delete audit entries.
+
+        The batched entries outlive a restart but _audit_delete_counts does
+        not, so without this the first delete after every restart that bumps a
+        pre-existing entry (same mod, same author, same channel as an earlier
+        delete) fails the recency check in _who_deleted and gets misreported
+        as a self-delete. Baselining makes that bump detectable.
+        """
+        if guild.id in self._audit_baselined:
+            return
+        self._audit_baselined.add(guild.id)
+        me = guild.me
+        if me is None or not me.guild_permissions.view_audit_log:
+            return
+        try:
+            counts = self._audit_delete_counts[guild.id]
+            async for entry in guild.audit_logs(
+                limit=25, action=discord.AuditLogAction.message_delete
+            ):
+                counts.setdefault(entry.id, getattr(entry.extra, "count", 1) or 1)
+        except discord.HTTPException:
+            # Retry on the next on_ready (reconnects re-fire it).
+            self._audit_baselined.discard(guild.id)
+
     async def _who_deleted(self, guild: discord.Guild, channel_id: int, author_id: int | None):
         """Best-effort: the audit-log entry for a delete in `channel_id`.
 
@@ -237,16 +279,37 @@ class Moderation(commands.Cog):
 
         • The audit entry is written slightly AFTER the gateway delete event, so
           querying immediately finds nothing and every delete looks like a
-          self-delete — hence the sleep before reading.
+          self-delete — hence the delayed, retried reads.
         • Repeat deletes (same mod, same author, same channel) are batched into
           ONE entry whose count is bumped without touching created_at, so a
-          recency check alone matches only the first delete. We remember each
-          entry's last seen count; a bump means the mod deleted another message.
+          recency check alone matches only the first delete. We track how many
+          deletes we have attributed to each entry and claim ONE per event, so
+          near-simultaneous deletes (a mod clearing several messages) each get
+          attributed instead of the first lookup swallowing the whole bump.
         """
         me = guild.me
         if me is None or not me.guild_permissions.view_audit_log:
+            if guild.id not in self._warned_no_audit:
+                self._warned_no_audit.add(guild.id)
+                log.warning(
+                    "Missing View Audit Log permission in %s — deleted-message "
+                    "log entries can't attribute who deleted what.",
+                    guild.name,
+                )
             return None
-        await asyncio.sleep(2)
+        for delay in (2, 4):
+            await asyncio.sleep(delay)
+            async with self._audit_locks[guild.id]:
+                entry = await self._claim_audit_entry(guild, channel_id, author_id)
+            if entry is not None:
+                return entry
+        return None
+
+    async def _claim_audit_entry(
+        self, guild: discord.Guild, channel_id: int, author_id: int | None
+    ):
+        """One pass over the audit log; claims and returns the matching entry."""
+        counts = self._audit_delete_counts[guild.id]
         try:
             async for entry in guild.audit_logs(
                 limit=10, action=discord.AuditLogAction.message_delete
@@ -259,20 +322,30 @@ class Moderation(commands.Cog):
                 ):
                     continue
                 count = getattr(entry.extra, "count", 1) or 1
-                seen = self._audit_delete_counts.get(entry.id)
-                self._audit_delete_counts[entry.id] = count
-                if len(self._audit_delete_counts) > 200:
-                    # Entry ids are snowflakes (time-ordered): drop the oldest.
-                    for old_id in sorted(self._audit_delete_counts)[:-100]:
-                        del self._audit_delete_counts[old_id]
+                seen = counts.get(entry.id)
                 if seen is None:
                     if (discord.utils.utcnow() - entry.created_at).total_seconds() < 60:
+                        # Fresh entry: claim one delete from it.
+                        counts[entry.id] = 1
+                        self._prune_audit_counts(counts)
                         return entry
+                    # Stale entry we never baselined (predates the last 25 at
+                    # startup): treat its whole count as already attributed.
+                    counts[entry.id] = count
+                    self._prune_audit_counts(counts)
                 elif count > seen:
+                    counts[entry.id] = seen + 1
                     return entry
         except discord.Forbidden:
             pass
         return None
+
+    @staticmethod
+    def _prune_audit_counts(counts: dict[int, int]):
+        if len(counts) > 200:
+            # Entry ids are snowflakes (time-ordered): drop the oldest.
+            for old_id in sorted(counts)[:-100]:
+                del counts[old_id]
 
     # ── automod listener ──────────────────────────────────────────────────
     @commands.Cog.listener()
