@@ -86,7 +86,12 @@ class Help(commands.Cog):
 
         if staff:
             embed.add_field(
-                name="🗂️ Projects (🛡️ Eboard)",
+                name="━━━━━━ 🛡️ Eboard commands ━━━━━━",
+                value="Everything below needs the Eboard role (or server admin).",
+                inline=False,
+            )
+            embed.add_field(
+                name="🗂️ Projects",
                 value=(
                     "`/createproject lead:@member` — create a project (role, channel, lead(s))\n"
                     "`/editproject` — edit a project's name/description/tags (reposts the intro)\n"
@@ -96,21 +101,21 @@ class Help(commands.Cog):
                 inline=False,
             )
             embed.add_field(
-                name="🔧 Server (🛡️ Eboard)",
+                name="🔧 Server",
                 value=(
                     "`/setup` — *owner/admin only:* create roles/channels & gate the server\n"
                     "`/health` — config & role/channel status\n"
-                    "`/backup` — back up this server's data now"
+                    "`/backup` — back up this server's member roster now"
                 ),
                 inline=False,
             )
             embed.add_field(
-                name="✅ Verification (🛡️ Eboard)",
+                name="✅ Verification",
                 value="`/whois member` — look up a member's verified info",
                 inline=False,
             )
             embed.add_field(
-                name="🤖 Auto-moderation (🛡️ Eboard)",
+                name="🤖 Auto-moderation",
                 value=(
                     "`/automod enable|disable [filter]` — toggle automod or one filter\n"
                     "  *filters:* `words` `invites` `spam` `mentions` `caps` `phishing` `contact`\n"
@@ -124,7 +129,7 @@ class Help(commands.Cog):
                 inline=False,
             )
             embed.add_field(
-                name="🛡️ Moderation (🛡️ Eboard)",
+                name="🛡️ Moderation",
                 value=(
                     "`/kick member [reason]` — kick (DMs the user)\n"
                     "`/ban member [reason]` — ban (DMs the user)\n"
@@ -137,7 +142,7 @@ class Help(commands.Cog):
                 inline=False,
             )
             embed.add_field(
-                name="🎟️ Reaction roles (🛡️ Eboard)",
+                name="🎟️ Reaction roles",
                 value=(
                     "`/reactionrole post title description` — post a role message\n"
                     "`/reactionrole add message_id emoji role` — bind an emoji to a role\n"

@@ -301,7 +301,7 @@ class Setup(commands.Cog):
             modlog_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
         await self._set_perms(modlog_ch, eboard, view_channel=True, reason="TaigaBot setup")
-        # #taiga-backups: Eboard only — holds DB snapshots (names + emails).
+        # #taiga-backups: Eboard only — holds member rosters (names + emails).
         backups_ch = await self._ensure_channel(guild, config.BACKUP_CHANNEL_NAME)
         await self._set_perms(
             backups_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"

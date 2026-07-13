@@ -82,8 +82,8 @@ DB_PATH: str = _get("DB_PATH", "taigabot.db")
 
 # ── Backups ──────────────────────────────────────────────────────────────────
 # /setup auto-creates an Eboard-only channel named BACKUP_CHANNEL_NAME and the
-# bot uploads DB snapshots there. BACKUP_CHANNEL_ID is an optional override to
-# point backups at a specific channel by ID instead of resolving by name.
+# bot uploads verified-member rosters there. BACKUP_CHANNEL_ID is an optional
+# override to point backups at a specific channel by ID instead of by name.
 BACKUP_CHANNEL_ID: int | None = (
     int(_get("BACKUP_CHANNEL_ID")) if _get("BACKUP_CHANNEL_ID").isdigit() else None
 )

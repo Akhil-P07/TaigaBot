@@ -297,16 +297,20 @@ against that and run automatically:
 
 - `/setup` creates a private, **Eboard-only** `#taiga-backups`.
 - Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads, **per server**, a
-  `.db` snapshot of *only that server's* data plus a **roster CSV** of its current
-  Verified members (admins are omitted — they're already visible in Discord).
+  **roster CSV** of its current Verified members with their verified real name
+  and email (admins are omitted — they're already visible in Discord). Members
+  who verified in another server are included too — each server's Eboard is
+  entitled to know who its verified members are.
   `/backup` does it on demand; `python backup_now.py`
   triggers it from a shell (`GID=<id> python backup_now.py` for one server).
-- **Restore:** download the latest `.db` from `#taiga-backups` and put it at the
-  bot's `DB_PATH`.
+- **Restore:** the roster lets you re-verify members by hand after a wipe. There
+  is no off-box copy of the full DB — an earlier `.db` attachment was removed
+  because the global `levels` table leaked every server's user IDs and XP into
+  every backup. For a full-fidelity backup, copy `DB_PATH` off the host yourself
+  (e.g. `Database.snapshot()` writes a consistent copy while the bot runs).
 
-> ⚠️ A backup holds real names and emails — keep `#taiga-backups` Eboard-only.
-> The file is plain (unencrypted) SQLite. `BACKUP_CHANNEL_ID` optionally overrides
-> the destination by ID.
+> ⚠️ A roster holds real names and emails — keep `#taiga-backups` Eboard-only.
+> `BACKUP_CHANNEL_ID` optionally overrides the destination by ID.
 
 ## Project layout
 ```

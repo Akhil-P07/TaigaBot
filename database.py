@@ -252,48 +252,6 @@ class Database:
         finally:
             await dest.close()
 
-    # Every table is scoped by this column, so a per-guild export is just a
-    # filtered copy of each one.
-    _GUILD_TABLES = (
-        "verified_users", "guild_settings", "banned_words", "automod_exempt",
-        "warnings", "reaction_roles",
-        "projects", "project_requests",
-    )
-
-    async def export_guild(self, guild_id: int, dest_path: str) -> None:
-        """Write a new SQLite DB at dest_path containing ONLY this guild's rows.
-
-        Used for backups so each server's snapshot holds just its own members'
-        data (names/emails/XP/etc.), never other guilds'.
-        """
-        # Build an empty DB with the same schema.
-        dest = await aiosqlite.connect(dest_path)
-        try:
-            await dest.executescript(SCHEMA)
-            await dest.commit()
-        finally:
-            await dest.close()
-
-        # Copy only this guild's rows via ATTACH (commit first so we're not
-        # inside a transaction, which ATTACH disallows).
-        await self.conn.commit()
-        await self.conn.execute("ATTACH DATABASE ? AS bak", (dest_path,))
-        try:
-            for table in self._GUILD_TABLES:
-                await self.conn.execute(
-                    f"INSERT INTO bak.{table} SELECT * FROM main.{table} "
-                    "WHERE guild_id = ?",
-                    (guild_id,),
-                )
-            # Levels are global (not guild-scoped), so copy the whole table —
-            # a restore from any guild's backup recovers everyone's XP.
-            await self.conn.execute(
-                "INSERT INTO bak.levels SELECT * FROM main.levels"
-            )
-            await self.conn.commit()
-        finally:
-            await self.conn.execute("DETACH DATABASE bak")
-
     # ── verified users ────────────────────────────────────────────────────
     async def email_is_registered(self, email: str) -> bool:
         cur = await self.conn.execute(

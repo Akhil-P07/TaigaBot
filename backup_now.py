@@ -1,8 +1,9 @@
 """One-shot backup trigger you can run from a shell.
 
-Logs in with the bot token, uploads a per-guild database backup to each server's
-#taiga-backups channel (same as the scheduled job / the /backup command), then
-exits. Useful for an immediate backup without waiting for the timer.
+Logs in with the bot token, uploads a per-guild verified-member roster to each
+server's #taiga-backups channel (same as the scheduled job / the /backup
+command), then exits. Useful for an immediate backup without waiting for the
+timer.
 
     python backup_now.py            # back up every guild
     GID=123456789012345678 python backup_now.py   # back up one guild only
@@ -36,13 +37,13 @@ async def _backup(client: discord.Client, db: database.Database, guild: discord.
         print(f"- {guild.name}: no #{config.BACKUP_CHANNEL_NAME} channel, skipping")
         return False
 
-    files_meta, db_bytes, count = await build_guild_backup(db, guild)
+    files_meta, count = await build_guild_backup(db, guild)
     try:
         ts = time.strftime("%Y%m%d-%H%M%S")
         await channel.send(
             content=(
                 f"🗄️ Manual backup for **{guild.name}** — {ts} "
-                f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified member(s))"
+                f"(roster of {count} verified member(s))"
             ),
             files=[discord.File(p, filename=n) for p, n in files_meta],
         )
@@ -52,7 +53,7 @@ async def _backup(client: discord.Client, db: database.Database, guild: discord.
                 os.remove(path)
             except OSError:
                 pass
-    print(f"- {guild.name}: uploaded {db_bytes} bytes + {count}-member roster to #{channel.name}")
+    print(f"- {guild.name}: uploaded {count}-member roster to #{channel.name}")
     return True
 
 

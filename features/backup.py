@@ -1,17 +1,22 @@
-"""Off-box, per-guild database backups — guards against host filesystem wipes.
+"""Off-box, per-guild member-roster backups — guards against host filesystem wipes.
 
 A normal crash, restart, or sleep never loses data: SQLite commits to disk on
 every write, so the file is intact when the bot wakes up. The real risk is the
 host (e.g. a free Replit/Render container) being rebuilt from scratch, which
-wipes the file entirely. This feature periodically uploads a snapshot of the
-database to an Eboard-only Discord channel, so the data survives even a full
-container reset — you re-download the latest `.db` and drop it back in.
+wipes the file entirely. This feature periodically uploads a CSV roster of the
+guild's current verified members to an Eboard-only Discord channel, so the
+membership record survives even a full container reset.
 
-Each guild's backup contains ONLY that guild's rows (its verified members, XP,
-warnings, settings, …) — never other servers' data — so one server's Eboard can
-never see another's names/emails. Alongside the .db, each backup includes a CSV
-roster of the guild's current members who hold the Verified role (admins are
-omitted — they're already visible in Discord).
+Each backup is a CSV of the guild's current members who hold the Verified role
+(admins are omitted — they're already visible in Discord), with each member's
+verified real name and email regardless of which server they verified in —
+the roster's job is to tell this server's Eboard who its members really are.
+
+An earlier version also attached a per-guild `.db` snapshot for full restores,
+but it leaked cross-server data (the levels table is global, so every server's
+backup carried every user's XP and ids) — removed; don't reintroduce a raw DB
+export without auditing every table it copies.
+
 /setup creates the Eboard-only backup channel (named BACKUP_CHANNEL_NAME) in
 each server.
 """
@@ -35,22 +40,19 @@ log = logging.getLogger("taigabot.backup")
 
 
 async def build_guild_backup(db, guild: discord.Guild):
-    """Create this guild's backup files. Returns (files, db_bytes, roster_count).
+    """Create this guild's backup files. Returns (files, roster_count).
 
     `files` is a list of (temp_path, upload_filename); the caller sends them and
-    then deletes the temp paths. It contains:
-      • the filtered per-guild database (.db), and
-      • a CSV roster of the guild's current verified members.
+    then deletes the temp paths. It contains a CSV roster of the guild's current
+    verified members.
 
     A current member is rostered if they hold the Verified role. Admins are
     omitted (they're already visible in Discord). Members who verified on another
-    server still appear, because joining here auto-grants them the Verified role.
+    server still appear WITH their real name/email (joining here auto-grants
+    them the Verified role) — intentional: any server's Eboard may see who its
+    verified members are.
     """
     ts = time.strftime("%Y%m%d-%H%M%S")
-    db_path = os.path.join(tempfile.gettempdir(), f"taigabot-{guild.id}-{ts}.db")
-    await db.export_guild(guild.id, db_path)
-    db_bytes = os.path.getsize(db_path)
-
     verified_role = config.VERIFIED_ROLE_NAME.lower()
     roster_path = os.path.join(tempfile.gettempdir(), f"roster-{guild.id}-{ts}.csv")
     count = 0
@@ -74,12 +76,7 @@ async def build_guild_backup(db, guild: discord.Guild):
             ])
             count += 1
 
-    return (
-        [(db_path, f"taigabot-{guild.id}-{ts}.db"),
-         (roster_path, f"roster-{guild.id}-{ts}.csv")],
-        db_bytes,
-        count,
-    )
+    return [(roster_path, f"roster-{guild.id}-{ts}.csv")], count
 
 
 class Backup(commands.Cog):
@@ -102,8 +99,8 @@ class Backup(commands.Cog):
         return gu.backups_channel(guild)
 
     async def _backup_guild(self, guild: discord.Guild) -> int | None:
-        """Export this guild's data + member roster and upload to its backup
-        channel. Returns the DB byte size, or None if there's no backup channel."""
+        """Build this guild's verified-member roster and upload it to its backup
+        channel. Returns the roster count, or None if there's no backup channel."""
         channel = self._channel_for(guild)
         if channel is None:
             return None
@@ -116,14 +113,14 @@ class Backup(commands.Cog):
                 guild.name, guild.id, channel.name,
             )
             return None
-        files_meta, db_bytes, count = await build_guild_backup(self.bot.db, guild)
+        files_meta, count = await build_guild_backup(self.bot.db, guild)
         try:
             files = [discord.File(p, filename=n) for p, n in files_meta]
             ts = time.strftime("%Y%m%d-%H%M%S")
             await channel.send(
                 content=(
                     f"🗄️ Backup for **{guild.name}** — {ts} "
-                    f"({db_bytes / 1024:.0f} KB DB + roster of {count} verified member(s))"
+                    f"(roster of {count} verified member(s))"
                 ),
                 files=files,
             )
@@ -139,7 +136,7 @@ class Backup(commands.Cog):
                     os.remove(path)
                 except OSError:
                     pass
-        return db_bytes
+        return count
 
     @tasks.loop(hours=12)  # real interval set from config in __init__
     async def auto_backup(self) -> None:
@@ -164,7 +161,7 @@ class Backup(commands.Cog):
 
     @app_commands.command(
         name="backup",
-        description="Back up THIS server's data to its backup channel now (Eboard only).",
+        description="Back up THIS server's member roster to its backup channel now (Eboard only).",
     )
     @is_eboard()
     async def backup_now(self, interaction: discord.Interaction) -> None:
@@ -181,7 +178,7 @@ class Backup(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            size = await self._backup_guild(guild)
+            count = await self._backup_guild(guild)
         except Exception:  # noqa: BLE001
             log.exception("Manual backup failed for guild %s.", guild.id)
             await interaction.followup.send(
@@ -189,8 +186,8 @@ class Backup(commands.Cog):
             )
             return
         await interaction.followup.send(
-            f"✅ Backed up **{guild.name}**'s data to "
-            f"{self._channel_for(guild).mention} ({size / 1024:.0f} KB).",
+            f"✅ Backed up **{guild.name}**'s verified-member roster to "
+            f"{self._channel_for(guild).mention} ({count} member(s)).",
             ephemeral=True,
         )
 
