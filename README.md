@@ -291,6 +291,11 @@ automod settings, XP, warnings, reaction-role bindings, and projects. The DB and
 `.env` are git-ignored. Since you store real names and emails, only give Eboard
 access to the host and the `#mod-log` / `#taiga-backups` channels.
 
+The bot's web server (`keep_alive.py`) serves a public **Terms of Service** at
+`/terms` and a **Privacy Policy** at `/privacy` describing exactly this. Paste
+those URLs into the Discord developer portal (**General Information → Terms of
+Service URL / Privacy Policy URL**) once you have a public domain.
+
 A crash, restart, or sleep never loses data (SQLite commits every write). The real
 risk is the host wiping its filesystem (e.g. a Replit rebuild). Backups guard
 against that and run automatically:
