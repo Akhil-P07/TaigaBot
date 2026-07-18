@@ -107,20 +107,27 @@ class Leveling(commands.Cog):
             embed.set_thumbnail(url=member.display_avatar.url)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="leaderboard", description="Top members by XP.")
+    @app_commands.command(name="leaderboard", description="Top members in this server by XP.")
+    @app_commands.guild_only()
     async def leaderboard(self, interaction: discord.Interaction):
-        rows = await self.bot.db.leaderboard(limit=10)
-        if not rows:
-            await interaction.response.send_message(
-                "No one's earned XP yet. Get chatting!", ephemeral=True
-            )
-            return
+        # XP is cumulative across all servers; only members of this guild are ranked.
+        rows = await self.bot.db.leaderboard(limit=None)
         medals = ["🥇", "🥈", "🥉"] + ["🔹"] * 7
         lines = []
-        for i, r in enumerate(rows):
+        for r in rows:
             member = interaction.guild.get_member(r["user_id"])
-            name = member.display_name if member else f"User {r['user_id']}"
-            lines.append(f"{medals[i]} **{name}** — level {r['level']} ({r['xp']} XP)")
+            if member is None:
+                continue
+            lines.append(
+                f"{medals[len(lines)]} **{member.display_name}** — level {r['level']} ({r['xp']} XP)"
+            )
+            if len(lines) == len(medals):
+                break
+        if not lines:
+            await interaction.response.send_message(
+                "No one in this server has earned XP yet. Get chatting!", ephemeral=True
+            )
+            return
         embed = discord.Embed(
             title=f"🏆 {interaction.guild.name} Leaderboard",
             description="\n".join(lines),

@@ -455,11 +455,12 @@ class Database:
                 (user_id, xp, level, last_msg_ts),
             )
 
-    async def leaderboard(self, limit: int = 10) -> list[aiosqlite.Row]:
-        cur = await self.conn.execute(
-            "SELECT user_id, xp, level FROM levels ORDER BY xp DESC LIMIT ?",
-            (limit,),
-        )
+    async def leaderboard(self, limit: int | None = 10) -> list[aiosqlite.Row]:
+        sql = "SELECT user_id, xp, level FROM levels ORDER BY xp DESC"
+        if limit is None:
+            cur = await self.conn.execute(sql)
+        else:
+            cur = await self.conn.execute(sql + " LIMIT ?", (limit,))
         return await cur.fetchall()
 
     async def rank(self, user_id: int) -> int | None:
