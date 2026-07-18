@@ -122,7 +122,7 @@ class Leveling(commands.Cog):
             name = member.display_name if member else f"User {r['user_id']}"
             lines.append(f"{medals[i]} **{name}** — level {r['level']} ({r['xp']} XP)")
         embed = discord.Embed(
-            title="🏆 AI Club Leaderboard",
+            title=f"🏆 {interaction.guild.name} Leaderboard",
             description="\n".join(lines),
             color=config.BOT_COLOR,
         )
