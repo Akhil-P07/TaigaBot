@@ -359,7 +359,12 @@ async def start_web(bot) -> None:
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
 
-    bot.loop.create_task(_prune_sessions_task(bot))
+    # NB: asyncio.create_task, not bot.loop.create_task — start_web runs BEFORE
+    # bot.start(), and discord.py raises on `bot.loop` until the client is
+    # logged in. We're already inside the running loop here, so this is both
+    # correct and independent of the bot's connection state.
+    # Held in app state so the task isn't garbage-collected mid-flight.
+    app["prune_task"] = asyncio.create_task(_prune_sessions_task(bot))
 
     built = "built" if _index_html() else "NOT BUILT — run `cd frontend && npm run build`"
     log.info("Web server listening on 0.0.0.0:%d (frontend: %s)", port, built)
