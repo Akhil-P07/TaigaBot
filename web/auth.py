@@ -113,7 +113,10 @@ async def login(request: web.Request) -> web.Response:
         "response_type": "code",
         "scope": "identify",
         "state": state,
-        "prompt": "none",  # skip the consent screen for people who've already approved
+        # No `prompt=none`. It skips the consent screen for people who have
+        # already approved, but Discord can answer `error=consent_required` for
+        # anyone who hasn't — turning a first-time sign-in into a dead end.
+        # One extra click for returning users is the better trade.
     }
     resp = web.HTTPFound(f"{AUTHORIZE_URL}?{urllib.parse.urlencode(params)}")
     resp.set_cookie(STATE_COOKIE, state, max_age=600, **_secure_cookie_kwargs())

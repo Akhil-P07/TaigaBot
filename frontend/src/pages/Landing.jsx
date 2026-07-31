@@ -17,6 +17,10 @@ const FEATURES = [
 const OAUTH_ERRORS = {
   bad_state: 'That sign-in link expired or was already used. Please try again.',
   denied: 'Sign-in was cancelled.',
+  consent_required: 'Discord needs you to approve the app first. Please try again.',
+  invalid_redirect:
+    "This site's redirect URL isn't registered with Discord. The bot operator " +
+    'needs to add it in the Developer Portal.',
   no_code: 'Discord did not return an authorization code. Please try again.',
   token_exchange: "Couldn't complete sign-in with Discord. Please try again.",
   identify: "Couldn't read your Discord profile. Please try again.",
