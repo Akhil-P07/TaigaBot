@@ -2,7 +2,9 @@
 
 A Discord bot for the **RIT AI Club**: university-email verification, channel
 gating, auto-moderation, leveling, reaction roles, a project system, an AI
-assistant, automatic backups, and a tsundere personality.
+assistant, a news-feed watcher, automatic backups, and a tsundere personality.
+It also ships a **web dashboard** (React) where Eboard can see their servers and
+the bot owner manages premium tiers and support tickets.
 
 Every feature is a self-contained module in [`features/`](features/) that the bot
 auto-loads on startup, so you add or remove features just by adding/deleting
@@ -14,11 +16,17 @@ reaction roles, projects) is keyed by guild. Two exceptions are global — share
 across every server: a member's **XP / level** (so their rank follows them
 everywhere) and their verification status (see the verification note below).
 
-> **Cross-server repeat-offender marker:** warnings stay per-server, but `/warnings`
-> and the spam auto-warn alert show Eboard a privacy-preserving **count** of how many
-> *other* TaigaBot servers have also warned that user (a number only — no names or
-> details), so a repeat offender across clubs is visible without exposing another
-> server's moderation history.
+> **Cross-server repeat-offender marker:** warnings stay per-server, but `/warnings`,
+> `/whois` and the spam auto-warn alert show Eboard a privacy-preserving **count** of
+> how many *other* TaigaBot servers have also warned that user (a number only — no
+> names or details), so a repeat offender across clubs is visible without exposing
+> another server's moderation history.
+>
+> That count is keyed to the member's **RIT identity** (the student ID in their
+> verified email), not their Discord account — so switching accounts, using
+> `/recover`, or verifying on the other RIT domain doesn't reset it. Each warning
+> is stamped with that identity when it's issued; unverified members are still
+> counted by Discord account.
 
 ---
 
@@ -32,7 +40,9 @@ everywhere) and their verification status (see the verification note below).
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
+| **News watcher** (any RSS/Atom feed) | `features/news.py` | `/news add\|remove\|list\|test` (Eboard) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
+| **Premium tier** | `features/premium.py` | `/premium` (read-only; granted on the dashboard) |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
 | **Backups** | `features/backup.py` | `/backup` (Eboard) |
@@ -87,6 +97,12 @@ Edit `.env` (token, Brevo). Everything else has sensible defaults. Optional:
 `GEMINI_API_KEY` to enable `/ask` (free key at
 <https://aistudio.google.com/apikey>). `GUILD_ID` gives one server instant command
 updates while developing; leave blank in production.
+
+To enable the **web dashboard** as well, set `DISCORD_CLIENT_SECRET`,
+`PUBLIC_BASE_URL`, `SESSION_SECRET` and `BOT_OWNER_IDS`, and add
+`<PUBLIC_BASE_URL>/api/auth/callback` to **OAuth2 → Redirects** in the Developer
+Portal. See [Web dashboard](#web-dashboard). Without them the public site still
+works — nobody can just sign in.
 
 ### 5. Run
 ```powershell
@@ -213,6 +229,104 @@ credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
 
 ---
 
+## News watcher (`/news`)
+
+Follows **any** news site or blog with an RSS/Atom feed and posts new articles to
+a channel you pick — club news, a department blog, a game's patch notes, a
+subreddit, whatever the server wants.
+
+```
+/news add source:<OpenAI|Anthropic|Custom RSS/Atom URL> channel:#news [url:…]
+/news remove source:…      /news list      /news test source:…
+```
+
+Pick **Custom** and paste a feed URL for anything else. Two AI sources are built
+in purely as one-click shortcuts, since this started as an AI-club bot:
+
+- **OpenAI** — a real RSS 2.0 feed at `openai.com/news/rss.xml`.
+- **Anthropic** — has **no RSS feed** (`/rss.xml` and `/news/rss.xml` both 404),
+  so the bot reads `sitemap.xml`, filters to `/news/` paths, and fetches each new
+  article once for its `og:title`/`og:description`. `robots.txt` permits this.
+
+Most sites publish a feed at `/rss.xml`, `/feed`, `/atom.xml`, or link one from
+their `<head>`. `/news test` previews the latest item without subscribing, which
+is the quickest way to check a URL works.
+
+**Cost is negligible** (well under $0.10/month even at 20+ guilds), because:
+
+- **Feeds are polled per URL, not per server.** Twenty servers watching OpenAI
+  cost one request per cycle, not twenty.
+- **Unchanged feeds skip parsing.** Neither source sends `ETag`/`Last-Modified`,
+  so the usual 304 trick rarely fires; the bot hashes the body instead — ~1 ms to
+  hash 640 KB versus ~36 ms to parse it.
+- Polls are floored at 15 minutes, bodies capped at 4 MiB, and each guild is
+  capped at `NEWS_MAX_CUSTOM_FEEDS` custom feeds (raised for premium servers).
+  That cap is what bounds total polling work across the whole deployment.
+
+Subscribing **seeds the feed as already-seen**, so adding OpenAI doesn't dump a
+thousand back-articles into your channel. Parsing uses only `xml.etree` from the
+standard library — no `feedparser`, no `beautifulsoup4` — to keep the image small.
+
+> **Custom URLs are user-supplied, so they're treated as an SSRF risk:** HTTPS
+> only, port 443 only, and every address the host resolves to must be publicly
+> routable — re-checked on each redirect, since a public host can 302 to
+> `169.254.169.254`. Feeds are validated at `/news add` time so a bad URL fails
+> loudly there rather than silently in the background loop.
+
+---
+
+## Web dashboard
+
+A React app in [`frontend/`](frontend/), served by the bot's own HTTP server
+(`web/server.py`) — same process, same SQLite file, no second service to deploy.
+
+- **Sign in with Discord** (`identify` scope only). Which servers you can manage
+  is derived from the bot's own membership data, so the bot **never asks Discord
+  for a list of your servers**.
+- **Eboard** see their servers, each server's tier, and its news subscriptions.
+- **Bot owner** (`BOT_OWNER_IDS`) grants and revokes premium, and reads the
+  support-ticket queue.
+- **Anyone signed in** can raise a support ticket and follow the thread.
+
+After changing anything under `frontend/src`:
+
+```bash
+cd frontend && npm install && npm run build
+```
+
+`frontend/dist` is **committed**, because the Railway deploy runs Python only and
+never invokes npm. For local work `npm run dev` proxies `/api` to a bot on port
+8080, so login and data work against real state.
+
+### Premium
+
+Premium is a per-server tier that raises limits (today: custom news feeds,
+`NEWS_MAX_CUSTOM_FEEDS` → `NEWS_PREMIUM_MAX_CUSTOM_FEEDS`). Any feature can gate
+on it with `await bot.db.is_premium(guild_id)`.
+
+**Payment is handled offline.** There is deliberately no payment processor,
+webhook, or self-serve upgrade in this codebase — the owner takes payment however
+they like, then grants the tier from the dashboard with an optional expiry and a
+note. In Discord, `/premium` only *reports* a server's tier; it can't grant one,
+so no server can upgrade itself.
+
+### Security
+
+The dashboard is the bot's only internet-facing surface, so:
+
+- per-IP rate limits, tiered by route (tightest on `/api/auth`);
+- 64 KB request body cap;
+- `Origin`/`Referer` checks on every state-changing request, on top of a
+  `SameSite=Lax`, `HttpOnly`, `Secure` session cookie;
+- a strict CSP (no inline scripts) plus `nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy` and HSTS;
+- `Cache-Control: no-store` on every `/api` response;
+- session tokens stored **hashed**, so a leaked database can't be replayed as a
+  login;
+- generic 500s — exception detail goes to the log, never to the client.
+
+---
+
 ## Phishing / scam detection
 
 The `phishing` automod filter catches scam messages — fake Nitro/Steam gifts,
@@ -274,6 +388,14 @@ dataset (1,830 labelled Discord messages).
 - **Resources & AI terms** — `RESOURCES` / `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
 - **XP tuning** — top of [`features/leveling.py`](features/leveling.py).
+- **News watcher** — poll interval and per-server feed caps in `.env`
+  (`NEWS_POLL_MINUTES`, `NEWS_MAX_CUSTOM_FEEDS`,
+  `NEWS_PREMIUM_MAX_CUSTOM_FEEDS`). To add another built-in source, extend
+  `BUILTIN_FEEDS` in [`utils/feeds.py`](utils/feeds.py) — `kind` is `rss` for a
+  normal feed or `sitemap` for a site without one.
+- **Dashboard look & copy** — [`frontend/src`](frontend/src); the brand palette
+  is the `:root` block at the top of `frontend/src/styles.css`. Rebuild with
+  `npm run build` after editing.
 
 ### Adding a feature
 Create `features/myfeature.py` with an async `setup(bot)` that adds a cog —
@@ -285,11 +407,16 @@ it's auto-loaded on next start. Use `self.bot.db` for storage and
 ## Data, privacy & backups
 
 Data lives in `taigabot.db` (SQLite): verified members' name/email/Discord ID,
-automod settings, XP, warnings, reaction-role bindings, and projects. The DB and
-`.env` are git-ignored. Since you store real names and emails, only give Eboard
-access to the host and the `#mod-log` / `#taiga-backups` channels.
+automod settings, XP, warnings, reaction-role bindings, projects, news
+subscriptions, premium grants, dashboard login sessions, and support tickets. The
+DB and `.env` are git-ignored. Since you store real names and emails, only give
+Eboard access to the host and the `#mod-log` / `#taiga-backups` channels.
 
-The bot's web server (`keep_alive.py`) serves a public **Terms of Service** at
+Dashboard sessions store a Discord ID, display name and avatar hash against a
+**hashed** token, and expire automatically (`SESSION_TTL_DAYS`, pruned hourly).
+Support tickets store whatever the reporter typed, readable by `BOT_OWNER_IDS`.
+
+The bot's web server (`web/server.py`) serves a public **Terms of Service** at
 `/terms` and a **Privacy Policy** at `/privacy` describing exactly this. Paste
 those URLs into the Discord developer portal (**General Information → Terms of
 Service URL / Privacy Policy URL**) once you have a public domain.
@@ -322,10 +449,16 @@ TaigaBot/
 ├─ config.py           # reads .env
 ├─ database.py         # async SQLite layer (bot.db)
 ├─ personality.py      # ✏️ editable tsundere lines
-├─ keep_alive.py       # tiny HTTP server for free hosts (Replit) uptime pings
 ├─ backup_now.py       # one-shot backup trigger for a shell
 ├─ requirements.txt
 ├─ .env.example
-├─ utils/              # checks.py, emailer.py, guildutils.py
+├─ utils/              # checks.py, emailer.py, guildutils.py, feeds.py
+├─ web/                # HTTP server, Discord OAuth2 login, JSON API
+│  ├─ server.py        # binds $PORT, serves /health + the built frontend
+│  ├─ auth.py          # OAuth2 login and session cookies
+│  └─ api.py           # /api/* — servers, premium, tickets
+├─ frontend/           # React dashboard (Vite); build output in frontend/dist
 └─ features/           # one file per feature (auto-loaded)
 ```
+
+See [Web dashboard](#web-dashboard) for building and configuring the frontend.

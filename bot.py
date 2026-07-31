@@ -20,8 +20,8 @@ from discord.ext import commands
 import config
 import personality
 from database import Database
-from keep_alive import start_keep_alive
-from utils.checks import NotEboard
+from web.server import start_web
+from utils.checks import NotBotOwner, NotEboard
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,6 +108,8 @@ async def on_app_command_error(
     if isinstance(error, NotEboard):
         sass = personality.say("permission_denied")
         msg = f"⛔ {error}" + (f"\n*{sass}*" if sass else "")
+    elif isinstance(error, NotBotOwner):
+        msg = f"⛔ {error}"
     elif isinstance(error, discord.app_commands.CommandOnCooldown):
         # NB: must come before the generic CheckFailure branch below —
         # CommandOnCooldown subclasses CheckFailure, so order matters.
@@ -143,7 +145,7 @@ async def main() -> None:
     if not config.DISCORD_TOKEN:
         log.error("No DISCORD_TOKEN set. Copy .env.example to .env and fill it in.")
         return
-    await start_keep_alive(bot)  # serves the landing page + command docs + health
+    await start_web(bot)  # serves the React dashboard, the JSON API, and /health
     async with bot:
         await bot.start(config.DISCORD_TOKEN)
 

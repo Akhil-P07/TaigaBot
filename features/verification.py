@@ -537,6 +537,23 @@ class Verification(commands.Cog):
         embed.add_field(
             name="Verified", value=f"<t:{row['verified_at']}:R>", inline=False
         )
+
+        # Global warning count. Tied to the RIT email rather than the Discord
+        # account, so a fresh account (or one moved via /recover) still carries
+        # its history. Deliberately a count only — no reasons or server names,
+        # matching how cross-server warnings are surfaced elsewhere.
+        servers, warns = await self.bot.db.global_warnings(member.id)
+        embed.add_field(
+            name="Global warnings",
+            value=(
+                f"**{warns}** across **{servers}** server(s)"
+                if warns
+                else "None on record"
+            ),
+            inline=False,
+        )
+        if warns:
+            embed.set_footer(text="Counts every server running TaigaBot, by RIT identity.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

@@ -28,3 +28,8 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+# NB: frontend/dist IS committed — Railway serves it directly and does not run
+# `npm run build` during deploy. Rebuild and commit it when the UI changes.

@@ -25,6 +25,13 @@ DISCORD_CLIENT_ID: str = _get("DISCORD_CLIENT_ID")
 # Public repo URL, shown as a "Build on GitHub" link on the landing page. Blank
 # hides it.
 GITHUB_URL: str = _get("GITHUB_URL")
+# Discord user IDs allowed to run bot-owner commands (e.g. /premium). Comma
+# separated. Leave blank to fall back to the application owner/team that Discord
+# reports for this bot. Server admins never qualify — this is authority over the
+# bot itself, not over any one server.
+BOT_OWNER_IDS: set[int] = {
+    int(x) for x in _get("BOT_OWNER_IDS").replace(" ", "").split(",") if x.isdigit()
+}
 # Club website — the footer logo links here. Blank makes the logo non-clickable.
 CLUB_URL: str = _get("CLUB_URL", "https://campusgroups.rit.edu/ritai/home/")
 
@@ -95,8 +102,48 @@ BACKUP_INTERVAL_HOURS: int = int(_get("BACKUP_INTERVAL_HOURS", "12"))
 GEMINI_API_KEY: str = _get("GEMINI_API_KEY")
 GEMINI_MODEL: str = _get("GEMINI_MODEL", "gemini-2.0-flash")
 
+# ── News feed watcher (/news) ────────────────────────────────────────────────
+# How often to poll subscribed feeds. Floored at 15 minutes: polls use
+# conditional GET so the steady state is a bodyless 304, but a tighter interval
+# still means more requests against third-party CDNs for no practical gain.
+NEWS_POLL_MINUTES: int = max(15, int(_get("NEWS_POLL_MINUTES", "15")))
+# Per-guild cap on custom (user-supplied) feed URLs. This is what bounds total
+# poll volume across the whole deployment — without it one server could add
+# hundreds of feeds and the bot would dutifully poll them all.
+NEWS_MAX_CUSTOM_FEEDS: int = max(1, int(_get("NEWS_MAX_CUSTOM_FEEDS", "5")))
+# Premium servers get a higher cap. Still a cap, not unlimited: poll volume is
+# what the whole cost model rests on, so it stays bounded for every tier.
+NEWS_PREMIUM_MAX_CUSTOM_FEEDS: int = max(
+    NEWS_MAX_CUSTOM_FEEDS, int(_get("NEWS_PREMIUM_MAX_CUSTOM_FEEDS", "25"))
+)
+
+# ── Dashboard (Discord OAuth2 login) ─────────────────────────────────────────
+# The web dashboard signs people in with Discord so they can see their servers'
+# tier, and so the owner can grant premium. Only the `identify` scope is
+# requested — which servers you can manage is worked out from the bot's own
+# membership data, not from your Discord account, so the bot never asks for a
+# list of your servers.
+DISCORD_CLIENT_SECRET: str = _get("DISCORD_CLIENT_SECRET")
+# Public base URL of the site, e.g. https://taigabot.up.railway.app — used to
+# build the OAuth redirect URI, which must match the Developer Portal exactly.
+PUBLIC_BASE_URL: str = _get("PUBLIC_BASE_URL").rstrip("/")
+# Secret for signing session cookies. Generate with: python -c "import secrets;
+# print(secrets.token_hex(32))". Changing it logs everyone out.
+SESSION_SECRET: str = _get("SESSION_SECRET")
+SESSION_TTL_DAYS: int = int(_get("SESSION_TTL_DAYS", "7"))
+
+# Max tickets one user may open per hour, so a public form can't be flooded.
+TICKET_RATE_PER_HOUR: int = int(_get("TICKET_RATE_PER_HOUR", "5"))
+
 # Bot branding
 BOT_COLOR = 0xE8552D  # warm orange, "Taiga"
+
+
+def dashboard_ready() -> bool:
+    """True when the dashboard has everything it needs to log people in."""
+    return bool(
+        DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET and PUBLIC_BASE_URL and SESSION_SECRET
+    )
 
 
 def validate() -> list[str]:
@@ -109,5 +156,23 @@ def validate() -> list[str]:
     if not EMAIL_FROM:
         problems.append(
             "EMAIL_FROM (or GMAIL_ADDRESS) not set — no verified sender address for email."
+        )
+    if not dashboard_ready():
+        missing = [
+            n for n, v in (
+                ("DISCORD_CLIENT_ID", DISCORD_CLIENT_ID),
+                ("DISCORD_CLIENT_SECRET", DISCORD_CLIENT_SECRET),
+                ("PUBLIC_BASE_URL", PUBLIC_BASE_URL),
+                ("SESSION_SECRET", SESSION_SECRET),
+            ) if not v
+        ]
+        problems.append(
+            f"Dashboard login disabled — missing {', '.join(missing)}. "
+            "The public site still works."
+        )
+    if dashboard_ready() and not BOT_OWNER_IDS:
+        problems.append(
+            "BOT_OWNER_IDS not set — premium management falls back to the Discord "
+            "application owner."
         )
     return problems
