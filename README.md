@@ -41,7 +41,7 @@ everywhere) and their verification status (see the verification note below).
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **News watcher** (any RSS/Atom feed) | `features/news.py` | `/news add\|rename\|remove\|list\|test` (Eboard) |
-| **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
+| **AI/ML resources** | `features/resources.py` | `/paper`, `/aiterm` |
 | **Premium tier** | `features/premium.py` | `/premium` (read-only; granted on the dashboard) |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
@@ -393,7 +393,7 @@ dataset (1,830 labelled Discord messages).
   or "reach me off-server" pitches. On by default; `/automod disable contact` to
   turn it off. Tune the `_PHONE_RE` / `_EMAIL_RE` / `_PAYMENT_RE` / `_PLATFORM_RE`
   patterns near the top of [`features/moderation.py`](features/moderation.py).
-- **Resources & AI terms** — `RESOURCES` / `AI_TERMS` in
+- **AI terms** — `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
 - **XP tuning** — top of [`features/leveling.py`](features/leveling.py).
 - **News watcher** — poll interval and per-server feed caps in `.env`

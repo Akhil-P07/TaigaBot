@@ -1,10 +1,9 @@
 """AI/ML engagement commands for the club.
 
   /paper <query>  — search for papers (via OpenAlex, a free keyless API)
-  /resource [topic] — curated learning resources (edit RESOURCES below)
   /aiterm         — a random "AI term of the day" with a definition
 
-Edit RESOURCES and AI_TERMS freely — they're plain Python data.
+Edit AI_TERMS freely — it's plain Python data.
 """
 from __future__ import annotations
 
@@ -39,28 +38,6 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
         for i in idxs:
             positions[i] = word
     return " ".join(positions[i] for i in sorted(positions))
-
-# ✏️ Curated resources — add your own club favorites here.
-RESOURCES: dict[str, list[tuple[str, str]]] = {
-    "Getting started": [
-        ("3Blue1Brown — Neural Networks", "https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi"),
-        ("fast.ai — Practical Deep Learning", "https://course.fast.ai/"),
-        ("Andrej Karpathy — Zero to Hero", "https://karpathy.ai/zero-to-hero.html"),
-    ],
-    "Math & foundations": [
-        ("MIT 18.06 Linear Algebra", "https://ocw.mit.edu/courses/18-06-linear-algebra-spring-2010/"),
-        ("StatQuest", "https://www.youtube.com/c/joshstarmer"),
-    ],
-    "LLMs & NLP": [
-        ("Hugging Face Course", "https://huggingface.co/learn/nlp-course"),
-        ("Stanford CS224N", "https://web.stanford.edu/class/cs224n/"),
-    ],
-    "Tools": [
-        ("PyTorch Tutorials", "https://pytorch.org/tutorials/"),
-        ("Papers With Code", "https://paperswithcode.com/"),
-        ("Weights & Biases", "https://wandb.ai/site"),
-    ],
-}
 
 # ✏️ AI term of the day pool.
 AI_TERMS: list[tuple[str, str]] = [
@@ -140,22 +117,6 @@ class Resources(commands.Cog):
                 inline=False,
             )
         await interaction.followup.send(embed=embed)
-
-    @app_commands.command(name="resource", description="Curated AI/ML learning resources.")
-    @app_commands.describe(topic="Optional topic")
-    async def resource(self, interaction: discord.Interaction, topic: str | None = None):
-        embed = discord.Embed(title="📚 AI Club resources", color=config.BOT_COLOR)
-        items = RESOURCES.items()
-        if topic:
-            t = topic.lower()
-            items = [(k, v) for k, v in RESOURCES.items() if t in k.lower()] or RESOURCES.items()
-        for category, links in items:
-            embed.add_field(
-                name=category,
-                value="\n".join(f"• [{name}]({url})" for name, url in links),
-                inline=False,
-            )
-        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="aiterm", description="Learn an AI term of the day.")
     async def aiterm(self, interaction: discord.Interaction):

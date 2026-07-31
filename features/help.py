@@ -73,7 +73,6 @@ class Help(commands.Cog):
             value=(
                 "`/ask prompt` — ask the AI assistant a question\n"
                 "`/paper query` — search for papers\n"
-                "`/resource` — curated learning resources\n"
                 "`/aiterm term` — learn an AI/ML term"
             ),
             inline=False,
