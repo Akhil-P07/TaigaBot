@@ -72,6 +72,13 @@ code {
 }
 .nav-links a:hover { background: var(--card); color: var(--text); text-decoration: none; }
 .nav-links a.active { color: var(--text); background: var(--card); }
+/* `.nav-links a` (0,1,1) outranks `.btn` (0,1,0), so a button rendered as an
+   anchor in the nav would inherit the muted link colour. Restore the button
+   colours explicitly. */
+.nav-links a.btn,
+.nav-links a.btn:hover { color: #fff; }
+.nav-links a.btn.secondary,
+.nav-links a.btn.secondary:hover { color: var(--text); }
 
 /* ---- buttons ---- */
 .btn {

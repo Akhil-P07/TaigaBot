@@ -48,6 +48,18 @@ export const api = {
     request(`/api/tickets/${id}/status`, { method: 'POST', body: { status } }),
 }
 
+// Site metadata (invite URL, GitHub/club links) is public, static for the life
+// of the page, and wanted by several components. Cache the in-flight promise so
+// they share one request instead of each firing their own.
+let metaPromise = null
+
+export function fetchMeta() {
+  if (!metaPromise) {
+    metaPromise = request('/api/meta').catch(() => ({}))
+  }
+  return metaPromise
+}
+
 export function timeAgo(unixSeconds) {
   if (!unixSeconds) return 'never'
   const secs = Math.floor(Date.now() / 1000) - unixSeconds

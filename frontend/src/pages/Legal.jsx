@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Page } from '../components/Layout.jsx'
+import { useMeta } from '../useMeta.js'
 
 // Ported verbatim from the old keep_alive.py pages, with two additions the
 // dashboard made necessary: the site now sets a login cookie and stores support
@@ -16,15 +16,7 @@ function Contact({ github, club }) {
 }
 
 export default function Legal({ kind }) {
-  const [meta, setMeta] = useState({ githubUrl: '', clubUrl: '' })
-
-  useEffect(() => {
-    fetch('/api/meta', { credentials: 'same-origin' })
-      .then((r) => r.json())
-      .then(setMeta)
-      .catch(() => {})
-  }, [])
-
+  const meta = useMeta()
   const contact = <Contact github={meta.githubUrl} club={meta.clubUrl} />
   const isTerms = kind === 'terms'
 

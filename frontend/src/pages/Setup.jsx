@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { Page } from '../components/Layout.jsx'
+import { useMeta } from '../useMeta.js'
 
 const STEPS = [
   ['Invite the bot', 'Use the invite link below. It requests exactly the permissions TaigaBot needs — no administrator.'],
@@ -10,14 +10,7 @@ const STEPS = [
 ]
 
 export default function Setup() {
-  const [invite, setInvite] = useState('')
-
-  useEffect(() => {
-    fetch('/api/meta', { credentials: 'same-origin' })
-      .then((r) => r.json())
-      .then((d) => setInvite(d.inviteUrl || ''))
-      .catch(() => {})
-  }, [])
+  const { inviteUrl: invite } = useMeta()
 
   return (
     <Page narrow>

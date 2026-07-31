@@ -1,5 +1,6 @@
 import { Link, NavLink } from 'react-router-dom'
 import { useAuth } from '../auth.jsx'
+import { useMeta } from '../useMeta.js'
 
 export function Nav() {
   const { user, logout } = useAuth()
@@ -34,10 +35,15 @@ export function Nav() {
 }
 
 export function Footer() {
+  const { githubUrl } = useMeta()
   return (
     <footer>
-      <Link to="/commands">Commands</Link> · <Link to="/setup">Setup</Link> ·{' '}
-      <Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link>
+      <Link to="/commands">Commands</Link> · <Link to="/setup">Setup</Link>
+      {/* Only shown when GITHUB_URL is configured, matching the old site. */}
+      {githubUrl && (
+        <> · <a href={githubUrl} target="_blank" rel="noreferrer">GitHub</a></>
+      )}
+      {' · '}<Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link>
     </footer>
   )
 }
