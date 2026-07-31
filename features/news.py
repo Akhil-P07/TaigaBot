@@ -465,6 +465,24 @@ class News(commands.Cog):
             (s for s in subs if str(s["feed_id"]) == source or s["url"] == source), None
         )
 
+    async def _find_sub_by_url(self, guild_id: int, url: str):
+        subs = await self.bot.db.get_guild_news_subs(guild_id)
+        return next((s for s in subs if s["url"] == url), None)
+
+    async def _find_sub_by_name(self, guild_id: int, name: str):
+        """Match a subscription by the name this guild sees it under.
+
+        Case-insensitive, and matches the effective name — so a built-in picked
+        straight out of autocomplete ("OpenAI") resolves even though no custom
+        name was ever set for it."""
+        wanted = clean_source_name(name).casefold()
+        if not wanted:
+            return None
+        subs = await self.bot.db.get_guild_news_subs(guild_id)
+        return next(
+            (s for s in subs if self._source_name(s, s).casefold() == wanted), None
+        )
+
     async def _sub_choices(self, interaction: discord.Interaction, current: str):
         subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
         out = []
@@ -571,8 +589,8 @@ class News(commands.Cog):
     )
     @app_commands.describe(
         source="Which source to preview",
-        url="For 'Custom': the feed URL",
-        name="Try out a name for this source (nothing is saved)",
+        url="For 'Custom': the feed URL — or leave it out and pick a name you follow",
+        name="A source this server already follows, or a name to try out",
     )
     @app_commands.choices(source=_SOURCE_CHOICES)
     @is_eboard()
@@ -585,18 +603,30 @@ class News(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
+        # A name the server already follows identifies the feed on its own, so
+        # previewing an existing subscription doesn't mean digging the URL back
+        # out of /news list. An explicit url still wins, and an unknown name is
+        # just a name to try out.
+        existing = await self._find_sub_by_name(interaction.guild_id, name or "")
+
         if source.value == "custom":
-            if not url:
+            if not url and existing is None:
                 await interaction.followup.send(
-                    "⚠️ Pick a `url` when using the custom source.", ephemeral=True
+                    "⚠️ Pick a `url` when using the custom source — or pick a `name` "
+                    "this server already follows.",
+                    ephemeral=True,
                 )
                 return
-            try:
-                feed_url = await fe.assert_safe_url_async(url)
-            except fe.UnsafeURL as exc:
-                await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
-                return
-            kind, path_prefix = "rss", ""
+            if url:
+                try:
+                    feed_url = await fe.assert_safe_url_async(url)
+                except fe.UnsafeURL as exc:
+                    await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
+                    return
+                kind, path_prefix = "rss", ""
+            else:
+                feed_url = existing["url"]
+                kind, path_prefix = existing["kind"], existing["path_prefix"]
         else:
             meta = fe.BUILTIN_FEEDS[source.value]
             feed_url, kind, path_prefix = meta["url"], meta["kind"], meta["path_prefix"]
@@ -626,27 +656,36 @@ class News(commands.Cog):
         fake_feed = {"url": feed_url}
         preview_name = clean_source_name(name or "")
         if not preview_name:
-            existing = next(
-                (
-                    s
-                    for s in await self.bot.db.get_guild_news_subs(interaction.guild_id)
-                    if s["url"] == feed_url
-                ),
-                None,
-            )
-            preview_name = self._source_name(fake_feed, existing)
+            sub = await self._find_sub_by_url(interaction.guild_id, feed_url)
+            preview_name = self._source_name(fake_feed, sub)
 
+        # Only call it a trial name when it isn't one the server already uses.
         note = (
             " Nothing was saved — set the name for real with `/news add` or `/news rename`."
-            if name
+            if name and existing is None
             else ""
         )
         await interaction.followup.send(
-            content=f"Preview — {len(items)} item(s) in this feed. "
+            content=f"Preview of `{feed_url}` — {len(items)} item(s) in this feed. "
                     f"Nothing was posted or marked seen.{note}",
             embed=self._build_embed(fake_feed, item, preview_name),
             ephemeral=True,
         )
+
+    @news_test.autocomplete("name")
+    async def _test_name_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Offer the names this server already uses, so previewing a followed
+        source is a pick from a list rather than a pasted URL. Free text still
+        goes through — the option doubles as "try this name on"."""
+        subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
+        out = []
+        for s in subs:
+            name = self._source_name(s, s)
+            if current.lower() in name.lower():
+                out.append(
+                    app_commands.Choice(name=f"{name} — {s['url']}"[:100], value=name[:100])
+                )
+        return out[:25]
 
 
 async def setup(bot: commands.Bot) -> None:

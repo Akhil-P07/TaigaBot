@@ -943,7 +943,8 @@ class Database:
 
     async def get_guild_news_subs(self, guild_id: int) -> list[aiosqlite.Row]:
         cur = await self.conn.execute(
-            "SELECT s.*, f.url, f.kind, f.last_polled, f.fail_count, f.last_error "
+            "SELECT s.*, f.url, f.kind, f.path_prefix, f.last_polled, f.fail_count, "
+            "f.last_error "
             "FROM news_subs s JOIN news_feeds f ON f.id = s.feed_id "
             "WHERE s.guild_id = ? "
             "ORDER BY LOWER(CASE WHEN s.display_name != '' THEN s.display_name "

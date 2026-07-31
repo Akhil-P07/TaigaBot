@@ -245,8 +245,10 @@ subreddit, whatever the server wants.
 subscription rather than the feed — two servers watching the same URL can each
 call it whatever makes sense to them. Leave it off (or run `/news rename` with an
 empty `name`) to fall back to the built-in label, or the feed's hostname. `/news
-test` previews under the name this server would actually see, and takes its own
-`name` to try one on before saving it.
+test` previews under the name this server would actually see. Its `name` option
+autocompletes from the sources this server already follows — pick one and the
+preview uses that subscription's feed, no URL needed — and typing a new name
+instead previews under that name without saving it.
 
 Pick **Custom** and paste a feed URL for anything else. Two AI sources are built
 in purely as one-click shortcuts, since this started as an AI-club bot:
