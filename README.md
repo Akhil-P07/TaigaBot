@@ -238,17 +238,21 @@ subreddit, whatever the server wants.
 ```
 /news add source:<OpenAI|Anthropic|Custom RSS/Atom URL> channel:#news [url:…] [name:…]
 /news rename source:… [name:…]
-/news remove source:…      /news list      /news test source:… [name:…]
+/news remove source:…      /news list      /news test source:<a source you follow> [name:…]
 ```
 
 `name` is what the source is called in the embeds it posts, and it belongs to the
 subscription rather than the feed — two servers watching the same URL can each
-call it whatever makes sense to them. Leave it off (or run `/news rename` with an
-empty `name`) to fall back to the built-in label, or the feed's hostname. `/news
-test` previews under the name this server would actually see. Its `name` option
-autocompletes from the sources this server already follows — pick one and the
-preview uses that subscription's feed, no URL needed — and typing a new name
-instead previews under that name without saving it.
+call it whatever makes sense to them. A custom feed added without a `name` is
+auto-named `Custom 1`, `Custom 2`, … (numbered per server, and never reusing a
+removed feed's number), so every source can be picked from a list by name rather
+than by URL. `/news rename` changes it later; built-ins keep their label unless
+renamed.
+
+`/news test` takes no URL: its `source` autocompletes to the sources this server
+follows, plus any built-in it doesn't follow yet, and previews under the name the
+server would actually see. Pass `name` to preview under a different one without
+saving it.
 
 Pick **Custom** and paste a feed URL for anything else. Two AI sources are built
 in purely as one-click shortcuts, since this started as an AI-club bot:
@@ -259,8 +263,9 @@ in purely as one-click shortcuts, since this started as an AI-club bot:
   article once for its `og:title`/`og:description`. `robots.txt` permits this.
 
 Most sites publish a feed at `/rss.xml`, `/feed`, `/atom.xml`, or link one from
-their `<head>`. `/news test` previews the latest item without subscribing, which
-is the quickest way to check a URL works.
+their `<head>`. `/news add` fetches and parses the URL before saving anything, so
+a feed that doesn't work is rejected on the spot; `/news test` then previews the
+latest item from a source without posting or marking anything seen.
 
 **Cost is negligible** (well under $0.10/month even at 20+ guilds), because:
 

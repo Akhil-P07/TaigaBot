@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import socket
 import time
 from urllib.parse import urljoin, urlparse
@@ -50,6 +51,9 @@ BACKOFF_AFTER_FAILURES = 5
 # Institute of Technology News", short enough to stay readable in an embed
 # author line and in the 100-character autocomplete entries.
 MAX_SOURCE_NAME = 60
+
+
+AUTO_NAME_RE = re.compile(r"^custom (\d+)$", re.IGNORECASE)
 
 
 def clean_source_name(name: str) -> str:
@@ -402,7 +406,14 @@ class News(commands.Cog):
                 await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
                 return
             kind, path_prefix, label = "rss", "", "custom"
+            # Custom feeds always end up named. Left nameless they'd show as a
+            # bare hostname, and two feeds from one host would be indistinguishable
+            # in /news test's picker.
+            auto_named = not display_name
+            if auto_named:
+                display_name = await self._next_auto_name(interaction.guild_id)
         else:
+            auto_named = False
             meta = fe.BUILTIN_FEEDS[source.value]
             feed_url = meta["url"]
             kind = meta["kind"]
@@ -443,11 +454,11 @@ class News(commands.Cog):
         seeded = await self.bot.db.filter_unseen(feed_id, [i.guid for i in items])
         await self.bot.db.mark_seen(feed_id, seeded)
 
-        shown = display_name or (label if label != "custom" else feed_url)
+        shown = display_name or label
         rename_hint = (
-            ""
-            if display_name
-            else "\nGive it a name for this server with `/news rename`."
+            f"\nIt's `{feed_url}` — give it a friendlier name with `/news rename`."
+            if auto_named
+            else ""
         )
         await interaction.followup.send(
             f"✅ Watching **{shown}** — new articles will go to {channel.mention}.\n"
@@ -457,31 +468,49 @@ class News(commands.Cog):
         )
 
     async def _find_sub(self, guild_id: int, source: str):
-        """Resolve what the user picked (a feed id from autocomplete, or a URL
-        typed by hand) to one of *this* guild's subscriptions."""
+        """Resolve what the user picked to one of *this* guild's subscriptions.
+
+        Autocomplete submits a feed id, but the same commands have to cope with
+        text typed by hand, so a URL or the name this guild sees the feed under
+        both work too."""
         source = source.strip()
+        wanted = clean_source_name(source).casefold()
         subs = await self.bot.db.get_guild_news_subs(guild_id)
         return next(
-            (s for s in subs if str(s["feed_id"]) == source or s["url"] == source), None
+            (
+                s
+                for s in subs
+                if str(s["feed_id"]) == source
+                or s["url"] == source
+                or (wanted and self._source_name(s, s).casefold() == wanted)
+            ),
+            None,
         )
 
-    async def _find_sub_by_url(self, guild_id: int, url: str):
-        subs = await self.bot.db.get_guild_news_subs(guild_id)
-        return next((s for s in subs if s["url"] == url), None)
+    @staticmethod
+    def _builtin_meta(source: str) -> dict | None:
+        """Match a built-in by its autocomplete value ("builtin:openai"), its key,
+        or its label, so typing "OpenAI" works as well as picking it."""
+        key = source.strip().removeprefix("builtin:").casefold()
+        for name, meta in fe.BUILTIN_FEEDS.items():
+            if key in (name.casefold(), meta["label"].casefold()):
+                return meta
+        return None
 
-    async def _find_sub_by_name(self, guild_id: int, name: str):
-        """Match a subscription by the name this guild sees it under.
+    async def _next_auto_name(self, guild_id: int) -> str:
+        """"Custom 1", "Custom 2", … — the name a custom feed gets when the adder
+        didn't pick one.
 
-        Case-insensitive, and matches the effective name — so a built-in picked
-        straight out of autocomplete ("OpenAI") resolves even though no custom
-        name was ever set for it."""
-        wanted = clean_source_name(name).casefold()
-        if not wanted:
-            return None
-        subs = await self.bot.db.get_guild_news_subs(guild_id)
-        return next(
-            (s for s in subs if self._source_name(s, s).casefold() == wanted), None
-        )
+        Every subscription having a name is what lets `/news test` (and any other
+        picker) offer this server's sources by name instead of by URL. Numbers
+        come off the highest one in use rather than filling gaps, so removing a
+        feed never makes a later add reuse a name someone still recognises."""
+        highest = 0
+        for s in await self.bot.db.get_guild_news_subs(guild_id):
+            match = AUTO_NAME_RE.match(s["display_name"])
+            if match:
+                highest = max(highest, int(match.group(1)))
+        return f"Custom {highest + 1}"
 
     async def _sub_choices(self, interaction: discord.Interaction, current: str):
         subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
@@ -588,47 +617,34 @@ class News(commands.Cog):
         name="test", description="Preview a source's latest article without posting it."
     )
     @app_commands.describe(
-        source="Which source to preview",
-        url="For 'Custom': the feed URL — or leave it out and pick a name you follow",
-        name="A source this server already follows, or a name to try out",
+        source="Which source to preview — pick from the ones this server follows",
+        name="Preview it under a different name (nothing is saved)",
     )
-    @app_commands.choices(source=_SOURCE_CHOICES)
     @is_eboard()
     async def news_test(
         self,
         interaction: discord.Interaction,
-        source: app_commands.Choice[str],
-        url: str | None = None,
+        source: str,
         name: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
-        # A name the server already follows identifies the feed on its own, so
-        # previewing an existing subscription doesn't mean digging the URL back
-        # out of /news list. An explicit url still wins, and an unknown name is
-        # just a name to try out.
-        existing = await self._find_sub_by_name(interaction.guild_id, name or "")
-
-        if source.value == "custom":
-            if not url and existing is None:
+        # `source` is a subscription this server already has, so there's no URL to
+        # type: everything the poll loop needs is already on the row. The two
+        # built-ins are offered too, so a source can be previewed before it's added.
+        existing = await self._find_sub(interaction.guild_id, source)
+        if existing is not None:
+            feed_url = existing["url"]
+            kind, path_prefix = existing["kind"], existing["path_prefix"]
+        else:
+            meta = self._builtin_meta(source)
+            if meta is None:
                 await interaction.followup.send(
-                    "⚠️ Pick a `url` when using the custom source — or pick a `name` "
-                    "this server already follows.",
+                    "⚠️ No such source here — pick one from the list, or add it "
+                    "first with `/news add`.",
                     ephemeral=True,
                 )
                 return
-            if url:
-                try:
-                    feed_url = await fe.assert_safe_url_async(url)
-                except fe.UnsafeURL as exc:
-                    await interaction.followup.send(f"⚠️ {exc}", ephemeral=True)
-                    return
-                kind, path_prefix = "rss", ""
-            else:
-                feed_url = existing["url"]
-                kind, path_prefix = existing["kind"], existing["path_prefix"]
-        else:
-            meta = fe.BUILTIN_FEEDS[source.value]
             feed_url, kind, path_prefix = meta["url"], meta["kind"], meta["path_prefix"]
 
         try:
@@ -652,17 +668,14 @@ class News(commands.Cog):
 
         # Preview the name this server would actually see: an explicit `name`
         # wins (so a rename can be tried before committing to it), otherwise the
-        # name already set on this guild's subscription, otherwise the default.
+        # name on this guild's subscription, otherwise the built-in default.
         fake_feed = {"url": feed_url}
-        preview_name = clean_source_name(name or "")
-        if not preview_name:
-            sub = await self._find_sub_by_url(interaction.guild_id, feed_url)
-            preview_name = self._source_name(fake_feed, sub)
+        current_name = self._source_name(fake_feed, existing)
+        preview_name = clean_source_name(name or "") or current_name
 
-        # Only call it a trial name when it isn't one the server already uses.
         note = (
-            " Nothing was saved — set the name for real with `/news add` or `/news rename`."
-            if name and existing is None
+            " Nothing was saved — keep the name with `/news rename`."
+            if preview_name != current_name
             else ""
         )
         await interaction.followup.send(
@@ -672,18 +685,24 @@ class News(commands.Cog):
             ephemeral=True,
         )
 
-    @news_test.autocomplete("name")
-    async def _test_name_autocomplete(self, interaction: discord.Interaction, current: str):
-        """Offer the names this server already uses, so previewing a followed
-        source is a pick from a list rather than a pasted URL. Free text still
-        goes through — the option doubles as "try this name on"."""
+    @news_test.autocomplete("source")
+    async def _test_source_autocomplete(self, interaction: discord.Interaction, current: str):
+        """This server's sources by name, then any built-in it doesn't follow yet
+        — so previewing is always a pick from a list, never a pasted URL."""
         subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
+        followed = {s["url"] for s in subs}
         out = []
         for s in subs:
-            name = self._source_name(s, s)
-            if current.lower() in name.lower():
+            entry = f"{self._source_name(s, s)} — {s['url']}"
+            if current.lower() in entry.lower():
+                out.append(app_commands.Choice(name=entry[:100], value=str(s["feed_id"])))
+        for key, meta in fe.BUILTIN_FEEDS.items():
+            if meta["url"] in followed:
+                continue
+            entry = f"{meta['label']} (not followed yet)"
+            if current.lower() in entry.lower():
                 out.append(
-                    app_commands.Choice(name=f"{name} — {s['url']}"[:100], value=name[:100])
+                    app_commands.Choice(name=entry[:100], value=f"builtin:{key}")
                 )
         return out[:25]
 
