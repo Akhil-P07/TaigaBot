@@ -16,8 +16,8 @@ turn a filter — or all of automod — off in a specific channel or category (a
 category covers every channel and thread inside it). Exemptions show in
 /automod status.
 
-Moderation commands (Eboard role only): /kick /ban /timeout /warn /warnings
-/clearwarnings /purge. Every command checks the caller's role via is_eboard().
+Moderation commands (Eboard role only): /kick /ban /timeout /warn /clearwarnings
+/purge. Every command checks the caller's role via is_eboard().
 """
 from __future__ import annotations
 
@@ -897,40 +897,6 @@ class Moderation(commands.Cog):
             pass
         await self._log("Warn", interaction, member, reason)
 
-    @app_commands.command(name="warnings", description="(Eboard) List a member's warnings.")
-    @app_commands.describe(member="Member")
-    @is_eboard()
-    async def warnings(self, interaction: discord.Interaction, member: discord.Member):
-        rows = await self.bot.db.get_warnings(interaction.guild_id, member.id)
-        # Hidden cross-server repeat-offender marker (Eboard-only): a count of how
-        # many OTHER TaigaBot servers have warned this user — no details/names.
-        other_servers, other_warns = await self.bot.db.cross_server_warnings(
-            member.id, interaction.guild_id
-        )
-        cross = (
-            f"🌐 **Repeat offender:** also warned in **{other_servers}** other "
-            f"TaigaBot server(s) — {other_warns} warning(s) total there."
-            if other_servers else ""
-        )
-
-        if not rows:
-            msg = f"{member} has no warnings here. 🎉"
-            if cross:
-                msg += f"\n{cross}"
-            await interaction.response.send_message(msg, ephemeral=True)
-            return
-
-        embed = discord.Embed(title=f"Warnings — {member}", color=discord.Color.orange())
-        for r in rows[:25]:
-            embed.add_field(
-                name=f"#{r['id']} • <t:{r['created_at']}:d>",
-                value=f"{r['reason']} — <@{r['moderator_id']}>",
-                inline=False,
-            )
-        if cross:
-            embed.add_field(name="🌐 Cross-server", value=cross, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @app_commands.command(name="clearwarnings", description="(Eboard) Clear a member's warnings.")
     @app_commands.describe(member="Member")
     @is_eboard()
@@ -961,7 +927,7 @@ class Moderation(commands.Cog):
         "posting a suspected phishing/scam message").
 
         The warning is attributed to the bot itself (moderator_id = bot id), so it
-        shows up in /warnings alongside manual ones. Rate-limited per user via
+        counts alongside manual ones. Rate-limited per user via
         AUTOWARN_COOLDOWN_SEC so a single burst (or a persistent offender) doesn't
         rack up dozens of warnings — the message is still deleted every time by
         punish(), only the warning is throttled.

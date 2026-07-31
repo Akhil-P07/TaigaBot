@@ -16,8 +16,8 @@ reaction roles, projects) is keyed by guild. Two exceptions are global — share
 across every server: a member's **XP / level** (so their rank follows them
 everywhere) and their verification status (see the verification note below).
 
-> **Cross-server repeat-offender marker:** warnings stay per-server, but `/warnings`,
-> `/whois` and the spam auto-warn alert show Eboard a privacy-preserving **count** of
+> **Cross-server repeat-offender marker:** warnings stay per-server, but `/whois`
+> and the spam auto-warn alert show Eboard a privacy-preserving **count** of
 > how many *other* TaigaBot servers have also warned that user (a number only — no
 > names or details), so a repeat offender across clubs is visible without exposing
 > another server's moderation history.
@@ -36,7 +36,7 @@ everywhere) and their verification status (see the verification note below).
 |---|---|---|
 | **Setup** | `features/setup.py` | `/setup` (owner/admin), `/health` (Eboard) |
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard) |
-| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword\|exempt\|unexempt` (filters: words, invites, spam, mentions, caps, phishing, contact), `/kick`, `/ban`, `/timeout`, `/warn`, `/warnings`, `/clearwarnings`, `/purge` (Eboard); deleted-message audit log to `#mod-log` |
+| **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword\|exempt\|unexempt` (filters: words, invites, spam, mentions, caps, phishing, contact), `/kick`, `/ban`, `/timeout`, `/warn`, `/clearwarnings`, `/purge` (Eboard); deleted-message audit log to `#mod-log` |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
