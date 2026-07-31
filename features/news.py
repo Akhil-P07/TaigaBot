@@ -46,6 +46,17 @@ MAX_POSTS_PER_CYCLE = 5
 # per cycle so a big sitemap diff can't turn into a burst of requests.
 MAX_ENRICH_PER_CYCLE = 5
 BACKOFF_AFTER_FAILURES = 5
+# Display names are per-server labels, not prose. Long enough for "Rochester
+# Institute of Technology News", short enough to stay readable in an embed
+# author line and in the 100-character autocomplete entries.
+MAX_SOURCE_NAME = 60
+
+
+def clean_source_name(name: str) -> str:
+    """Normalise a user-supplied source name: one line, no runaway whitespace,
+    capped. Returns '' for anything that's only whitespace, which callers treat
+    as "use the default name"."""
+    return " ".join(name.split())[:MAX_SOURCE_NAME]
 
 
 class Fetched:
@@ -257,8 +268,15 @@ class News(commands.Cog):
             await self._fanout(feed, item, subs)
 
     async def _fanout(self, feed, item: fe.Item, subs) -> None:
-        embed = self._build_embed(feed, item)
+        # The embed is per-subscription, not per-feed: each server can have its
+        # own name for the same URL. Built embeds are reused across the servers
+        # that share a name, so the common case is still one embed for everyone.
+        embeds: dict[str, discord.Embed] = {}
         for sub in subs:
+            name = self._source_name(feed, sub)
+            embed = embeds.get(name)
+            if embed is None:
+                embed = embeds[name] = self._build_embed(feed, item, name)
             guild = self.bot.get_guild(sub["guild_id"])
             if guild is None:
                 continue
@@ -286,20 +304,29 @@ class News(commands.Cog):
                 log.exception("Failed posting news to #%s (guild %s).", channel.name, guild.id)
 
     @staticmethod
-    def _source_name(feed) -> str:
+    def _source_name(feed, sub=None) -> str:
+        """What to call this feed. A server's own name for it wins; otherwise
+        fall back to the built-in label, then the hostname."""
+        if sub is not None:
+            try:
+                custom = sub["display_name"]
+            except (KeyError, IndexError):  # rows from before the column existed
+                custom = ""
+            if custom:
+                return custom
         for meta in fe.BUILTIN_FEEDS.values():
             if meta["url"] == feed["url"]:
                 return meta["label"]
         return urlparse(feed["url"]).hostname or "News"
 
-    def _build_embed(self, feed, item: fe.Item) -> discord.Embed:
+    def _build_embed(self, feed, item: fe.Item, source_name: str = "") -> discord.Embed:
         embed = discord.Embed(
             title=item.title[:256],
             url=item.link,
             description=item.summary or None,
             color=config.BOT_COLOR,
         )
-        embed.set_author(name=f"📰 {self._source_name(feed)}")
+        embed.set_author(name=f"📰 {source_name or self._source_name(feed)}")
         if item.published:
             embed.set_footer(text=item.published)
         return embed
@@ -321,6 +348,7 @@ class News(commands.Cog):
         source="Which news source to watch",
         channel="Where to post new articles",
         url="For 'Custom': the https:// RSS or Atom feed URL",
+        name="What to call this source in posts (this server only)",
     )
     @app_commands.choices(source=_SOURCE_CHOICES)
     @is_eboard()
@@ -330,8 +358,11 @@ class News(commands.Cog):
         source: app_commands.Choice[str],
         channel: discord.TextChannel,
         url: str | None = None,
+        name: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
+
+        display_name = clean_source_name(name or "")
 
         perms = channel.permissions_for(interaction.guild.me)
         if not (perms.view_channel and perms.send_messages and perms.embed_links):
@@ -400,7 +431,9 @@ class News(commands.Cog):
             return
 
         feed_id = await self.bot.db.upsert_feed(feed_url, kind, path_prefix)
-        await self.bot.db.add_news_sub(interaction.guild_id, feed_id, channel.id, label)
+        await self.bot.db.add_news_sub(
+            interaction.guild_id, feed_id, channel.id, label, display_name
+        )
         await self.bot.db.record_feed_poll(
             feed_id, got.etag, got.last_modified, hashlib.sha256(got.body).hexdigest()
         )
@@ -410,23 +443,42 @@ class News(commands.Cog):
         seeded = await self.bot.db.filter_unseen(feed_id, [i.guid for i in items])
         await self.bot.db.mark_seen(feed_id, seeded)
 
+        shown = display_name or (label if label != "custom" else feed_url)
+        rename_hint = (
+            ""
+            if display_name
+            else "\nGive it a name for this server with `/news rename`."
+        )
         await interaction.followup.send(
-            f"✅ Watching **{label if label != 'custom' else feed_url}** — new articles "
-            f"will go to {channel.mention}.\n"
+            f"✅ Watching **{shown}** — new articles will go to {channel.mention}.\n"
             f"Caught up on {len(items)} existing item(s) without posting them; "
-            f"checking every {config.NEWS_POLL_MINUTES} minutes.",
+            f"checking every {config.NEWS_POLL_MINUTES} minutes.{rename_hint}",
             ephemeral=True,
         )
+
+    async def _find_sub(self, guild_id: int, source: str):
+        """Resolve what the user picked (a feed id from autocomplete, or a URL
+        typed by hand) to one of *this* guild's subscriptions."""
+        source = source.strip()
+        subs = await self.bot.db.get_guild_news_subs(guild_id)
+        return next(
+            (s for s in subs if str(s["feed_id"]) == source or s["url"] == source), None
+        )
+
+    async def _sub_choices(self, interaction: discord.Interaction, current: str):
+        subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
+        out = []
+        for s in subs:
+            entry = f"{self._source_name(s, s)} — {s['url']}"[:100]
+            if current.lower() in entry.lower():
+                out.append(app_commands.Choice(name=entry, value=str(s["feed_id"])))
+        return out[:25]
 
     @news.command(name="remove", description="Stop watching a news source.")
     @app_commands.describe(source="Which subscription to remove (from /news list)")
     @is_eboard()
     async def news_remove(self, interaction: discord.Interaction, source: str):
-        subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
-        match = next(
-            (s for s in subs if str(s["feed_id"]) == source.strip() or s["url"] == source.strip()),
-            None,
-        )
+        match = await self._find_sub(interaction.guild_id, source)
         if match is None:
             await interaction.response.send_message(
                 "⚠️ No such subscription here — check `/news list`.", ephemeral=True
@@ -434,18 +486,54 @@ class News(commands.Cog):
             return
         await self.bot.db.remove_news_sub(interaction.guild_id, match["feed_id"])
         await interaction.response.send_message(
-            f"🛑 Stopped watching `{match['url']}`.", ephemeral=True
+            f"🛑 Stopped watching **{self._source_name(match, match)}** "
+            f"(`{match['url']}`).",
+            ephemeral=True,
         )
 
     @news_remove.autocomplete("source")
     async def _remove_autocomplete(self, interaction: discord.Interaction, current: str):
-        subs = await self.bot.db.get_guild_news_subs(interaction.guild_id)
-        out = []
-        for s in subs:
-            name = f"{s['label']} — {s['url']}"[:100]
-            if current.lower() in name.lower():
-                out.append(app_commands.Choice(name=name, value=str(s["feed_id"])))
-        return out[:25]
+        return await self._sub_choices(interaction, current)
+
+    @news.command(
+        name="rename", description="Rename a news source for this server's posts."
+    )
+    @app_commands.describe(
+        source="Which subscription to rename (from /news list)",
+        name="The new name — leave empty to go back to the default",
+    )
+    @is_eboard()
+    async def news_rename(
+        self, interaction: discord.Interaction, source: str, name: str | None = None
+    ):
+        match = await self._find_sub(interaction.guild_id, source)
+        if match is None:
+            await interaction.response.send_message(
+                "⚠️ No such subscription here — check `/news list`.", ephemeral=True
+            )
+            return
+
+        display_name = clean_source_name(name or "")
+        await self.bot.db.rename_news_sub(
+            interaction.guild_id, match["feed_id"], display_name
+        )
+
+        if display_name:
+            msg = (
+                f"✏️ `{match['url']}` now posts as **{display_name}** in this server."
+            )
+        else:
+            # Re-read is unnecessary: with the name cleared the fallback is what
+            # _source_name returns for the feed row alone.
+            msg = (
+                f"✏️ Cleared the custom name — `{match['url']}` posts as "
+                f"**{self._source_name(match)}** again."
+            )
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @news_rename.autocomplete("source")
+    async def _rename_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._sub_choices(interaction, current)
 
     @news.command(name="list", description="Show this server's news subscriptions.")
     @is_eboard()
@@ -469,8 +557,13 @@ class News(commands.Cog):
             ]
             if s["fail_count"]:
                 lines.append(f"⚠️ {s['fail_count']} failure(s): {s['last_error'] or 'unknown'}")
-            embed.add_field(name=s["label"] or "custom", value="\n".join(lines), inline=False)
-        embed.set_footer(text=f"Checked every {config.NEWS_POLL_MINUTES} minutes.")
+            embed.add_field(
+                name=self._source_name(s, s)[:256], value="\n".join(lines), inline=False
+            )
+        embed.set_footer(
+            text=f"Checked every {config.NEWS_POLL_MINUTES} minutes. "
+                 f"Rename a source with /news rename."
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @news.command(

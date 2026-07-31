@@ -138,6 +138,9 @@ async def guild_detail(request: web.Request) -> web.Response:
             {
                 "feedId": s["feed_id"],
                 "label": s["label"],
+                # This server's own name for the feed; blank means it uses the
+                # default (built-in label or hostname).
+                "name": s["display_name"],
                 "url": s["url"],
                 "channelId": str(s["channel_id"]),
                 "channelName": getattr(guild.get_channel(s["channel_id"]), "name", None),

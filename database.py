@@ -141,7 +141,13 @@ CREATE TABLE IF NOT EXISTS news_subs (
     guild_id   INTEGER NOT NULL,
     feed_id    INTEGER NOT NULL,
     channel_id INTEGER NOT NULL,
+    -- 'custom' or a built-in source key. This is the *type* marker (the custom
+    -- feed cap counts it), never a display string.
     label      TEXT    NOT NULL DEFAULT '',
+    -- Optional per-server display name. It lives on the subscription, not the
+    -- feed, so two guilds watching the same URL can each call it what they like.
+    -- Blank means "fall back to the built-in label or the feed's hostname".
+    display_name TEXT  NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (guild_id, feed_id)
 );
@@ -305,6 +311,15 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_warnings_identity ON warnings (identity_key)"
         )
         await self.conn.commit()
+
+        # Per-server display names for news subscriptions (added later).
+        cur = await self.conn.execute("PRAGMA table_info(news_subs)")
+        ncols = {r[1] for r in await cur.fetchall()}
+        if ncols and "display_name" not in ncols:
+            await self.conn.execute(
+                "ALTER TABLE news_subs ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+            )
+            await self.conn.commit()
 
         # Levels used to be per-guild (PRIMARY KEY guild_id, user_id). Collapse
         # them into a single global row per user so XP follows a member across
@@ -867,16 +882,42 @@ class Database:
                 )
 
     async def add_news_sub(
-        self, guild_id: int, feed_id: int, channel_id: int, label: str
+        self,
+        guild_id: int,
+        feed_id: int,
+        channel_id: int,
+        label: str,
+        display_name: str = "",
     ) -> None:
+        """Subscribe a guild to a feed. Re-adding an existing feed updates the
+        channel, and only overwrites the display name when a new one was given —
+        so `/news add` without a name doesn't silently wipe a rename."""
         async with self._tx():
             await self.conn.execute(
-                """INSERT INTO news_subs (guild_id, feed_id, channel_id, label, created_at)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO news_subs
+                       (guild_id, feed_id, channel_id, label, display_name, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(guild_id, feed_id)
-                   DO UPDATE SET channel_id = excluded.channel_id, label = excluded.label""",
-                (guild_id, feed_id, channel_id, label, int(time.time())),
+                   DO UPDATE SET channel_id = excluded.channel_id,
+                                 label = excluded.label,
+                                 display_name = CASE
+                                     WHEN excluded.display_name != '' THEN excluded.display_name
+                                     ELSE news_subs.display_name
+                                 END""",
+                (guild_id, feed_id, channel_id, label, display_name, int(time.time())),
             )
+
+    async def rename_news_sub(self, guild_id: int, feed_id: int, display_name: str) -> bool:
+        """Set (or, with an empty string, clear) this guild's name for a feed.
+
+        Scoped to the guild's own subscription row, so renaming never touches
+        what another server calls the same URL."""
+        async with self._tx():
+            cur = await self.conn.execute(
+                "UPDATE news_subs SET display_name = ? WHERE guild_id = ? AND feed_id = ?",
+                (display_name, guild_id, feed_id),
+            )
+            return cur.rowcount > 0
 
     async def remove_news_sub(self, guild_id: int, feed_id: int) -> bool:
         """Drop a subscription. Also deletes the feed (and its seen history) if no
@@ -904,7 +945,9 @@ class Database:
         cur = await self.conn.execute(
             "SELECT s.*, f.url, f.kind, f.last_polled, f.fail_count, f.last_error "
             "FROM news_subs s JOIN news_feeds f ON f.id = s.feed_id "
-            "WHERE s.guild_id = ? ORDER BY s.label",
+            "WHERE s.guild_id = ? "
+            "ORDER BY LOWER(CASE WHEN s.display_name != '' THEN s.display_name "
+            "ELSE s.label END), s.feed_id",
             (guild_id,),
         )
         return list(await cur.fetchall())

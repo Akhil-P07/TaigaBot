@@ -74,7 +74,8 @@ export default function ServerDetail() {
       <h3>News subscriptions</h3>
       <p className="muted" style={{ marginBottom: 14 }}>
         Add and remove these from Discord with <code>/news add</code> and{' '}
-        <code>/news remove</code>.
+        <code>/news remove</code>. Name a source for this server with{' '}
+        <code>/news rename</code>.
       </p>
 
       {guild.news.length === 0 ? (
@@ -86,8 +87,9 @@ export default function ServerDetail() {
         guild.news.map((n) => (
           <div className="row" key={n.feedId}>
             <div className="meta">
-              <strong>{n.label === 'custom' ? n.url : n.label}</strong>
+              <strong>{n.name || (n.label === 'custom' ? n.url : n.label)}</strong>
               <span>
+                {n.name && <>{n.url} · </>}
                 {n.channelName ? `#${n.channelName}` : '⚠️ channel missing'} · checked{' '}
                 {timeAgo(n.lastPolled)}
                 {n.failCount > 0 && ` · ⚠️ ${n.failCount} failure(s): ${n.lastError}`}

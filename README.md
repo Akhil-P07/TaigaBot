@@ -40,7 +40,7 @@ everywhere) and their verification status (see the verification note below).
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
 | **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
-| **News watcher** (any RSS/Atom feed) | `features/news.py` | `/news add\|remove\|list\|test` (Eboard) |
+| **News watcher** (any RSS/Atom feed) | `features/news.py` | `/news add\|rename\|remove\|list\|test` (Eboard) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/resource`, `/aiterm` |
 | **Premium tier** | `features/premium.py` | `/premium` (read-only; granted on the dashboard) |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
@@ -236,9 +236,15 @@ a channel you pick — club news, a department blog, a game's patch notes, a
 subreddit, whatever the server wants.
 
 ```
-/news add source:<OpenAI|Anthropic|Custom RSS/Atom URL> channel:#news [url:…]
+/news add source:<OpenAI|Anthropic|Custom RSS/Atom URL> channel:#news [url:…] [name:…]
+/news rename source:… [name:…]
 /news remove source:…      /news list      /news test source:…
 ```
+
+`name` is what the source is called in the embeds it posts, and it belongs to the
+subscription rather than the feed — two servers watching the same URL can each
+call it whatever makes sense to them. Leave it off (or run `/news rename` with an
+empty `name`) to fall back to the built-in label, or the feed's hostname.
 
 Pick **Custom** and paste a feed URL for anything else. Two AI sources are built
 in purely as one-click shortcuts, since this started as an AI-club bot:
