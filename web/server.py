@@ -300,7 +300,26 @@ async def _spa(request: web.Request) -> web.Response:
     html = _index_html()
     if html is None:
         return web.Response(text=_MISSING_BUILD_PAGE, content_type="text/html", status=503)
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        # The shell MUST be revalidated on every load. It names the hashed bundle
+        # to fetch, so a cached copy pins the browser to whatever build it first
+        # saw — every deploy would look like it silently did nothing. The bundles
+        # themselves are content-hashed and cached hard (see below).
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+async def _cache_static(request: web.Request, response: web.StreamResponse) -> None:
+    """Cache content-hashed bundles aggressively.
+
+    Only /static is safe for this: Vite renames those files whenever their
+    contents change, so a stale copy is unreachable by construction. The HTML
+    shell is deliberately excluded — see `_spa`.
+    """
+    if request.path.startswith("/static/") and response.status == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
 
 
 async def _prune_sessions_task(bot) -> None:
@@ -339,9 +358,11 @@ def build_app(bot) -> web.Application:
     # The bot's own images (logo, favicon).
     app.router.add_static("/assets", ASSETS_DIR)
     # Vite's hashed JS/CSS bundles, emitted to dist/static (see vite.config.js,
-    # which moves them off /assets so the two don't collide).
+    # which moves them off /assets so the two don't collide). Safe to cache
+    # forever: the filename changes whenever the contents do.
     if (DIST_DIR / "static").is_dir():
         app.router.add_static("/static", DIST_DIR / "static")
+        app.on_response_prepare.append(_cache_static)
 
     # Everything else falls through to the SPA.
     app.router.add_get("/{tail:.*}", _spa)
