@@ -238,13 +238,15 @@ subreddit, whatever the server wants.
 ```
 /news add source:<OpenAI|Anthropic|Custom RSS/Atom URL> channel:#news [url:…] [name:…]
 /news rename source:… [name:…]
-/news remove source:…      /news list      /news test source:…
+/news remove source:…      /news list      /news test source:… [name:…]
 ```
 
 `name` is what the source is called in the embeds it posts, and it belongs to the
 subscription rather than the feed — two servers watching the same URL can each
 call it whatever makes sense to them. Leave it off (or run `/news rename` with an
-empty `name`) to fall back to the built-in label, or the feed's hostname.
+empty `name`) to fall back to the built-in label, or the feed's hostname. `/news
+test` previews under the name this server would actually see, and takes its own
+`name` to try one on before saving it.
 
 Pick **Custom** and paste a feed URL for anything else. Two AI sources are built
 in purely as one-click shortcuts, since this started as an AI-club bot:

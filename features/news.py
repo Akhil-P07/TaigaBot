@@ -569,7 +569,11 @@ class News(commands.Cog):
     @news.command(
         name="test", description="Preview a source's latest article without posting it."
     )
-    @app_commands.describe(source="Which source to preview", url="For 'Custom': the feed URL")
+    @app_commands.describe(
+        source="Which source to preview",
+        url="For 'Custom': the feed URL",
+        name="Try out a name for this source (nothing is saved)",
+    )
     @app_commands.choices(source=_SOURCE_CHOICES)
     @is_eboard()
     async def news_test(
@@ -577,6 +581,7 @@ class News(commands.Cog):
         interaction: discord.Interaction,
         source: app_commands.Choice[str],
         url: str | None = None,
+        name: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -614,10 +619,32 @@ class News(commands.Cog):
         item = items[0]
         if not item.title:
             item = await self._enrich(item)
+
+        # Preview the name this server would actually see: an explicit `name`
+        # wins (so a rename can be tried before committing to it), otherwise the
+        # name already set on this guild's subscription, otherwise the default.
         fake_feed = {"url": feed_url}
+        preview_name = clean_source_name(name or "")
+        if not preview_name:
+            existing = next(
+                (
+                    s
+                    for s in await self.bot.db.get_guild_news_subs(interaction.guild_id)
+                    if s["url"] == feed_url
+                ),
+                None,
+            )
+            preview_name = self._source_name(fake_feed, existing)
+
+        note = (
+            " Nothing was saved — set the name for real with `/news add` or `/news rename`."
+            if name
+            else ""
+        )
         await interaction.followup.send(
-            content=f"Preview — {len(items)} item(s) in this feed. Nothing was posted or marked seen.",
-            embed=self._build_embed(fake_feed, item),
+            content=f"Preview — {len(items)} item(s) in this feed. "
+                    f"Nothing was posted or marked seen.{note}",
+            embed=self._build_embed(fake_feed, item, preview_name),
             ephemeral=True,
         )
 
