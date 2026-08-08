@@ -16,6 +16,7 @@ from discord.ext import commands
 
 import config
 from utils import guildutils as gu
+from utils.cooldowns import CHATTY, spam_cooldown
 
 XP_COOLDOWN_SEC = 60          # min seconds between XP-earning messages per user
 XP_PER_MESSAGE = (15, 25)     # random XP range per qualifying message
@@ -83,6 +84,7 @@ class Leveling(commands.Cog):
 
     @app_commands.command(name="rank", description="Show your (or someone's) level and XP.")
     @app_commands.describe(member="Whose rank to show (default: you)")
+    @spam_cooldown(*CHATTY)  # 1 use / 5s per member; Eboard exempt
     async def rank(
         self, interaction: discord.Interaction, member: discord.Member | None = None
     ):
@@ -109,6 +111,7 @@ class Leveling(commands.Cog):
 
     @app_commands.command(name="leaderboard", description="Top members in this server by XP.")
     @app_commands.guild_only()
+    @spam_cooldown(*CHATTY)  # 1 use / 5s per member; Eboard exempt
     async def leaderboard(self, interaction: discord.Interaction):
         # XP is cumulative across all servers; only members of this guild are ranked.
         rows = await self.bot.db.leaderboard(limit=None)

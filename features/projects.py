@@ -50,6 +50,7 @@ from discord.ext import commands
 import config
 from utils import guildutils as gu
 from utils.checks import is_eboard, member_has_role
+from utils.cooldowns import BROWSE, spam_cooldown
 
 log = logging.getLogger("taigabot.projects")
 
@@ -134,19 +135,6 @@ def _distinct_tags(rows) -> list[str]:
             if t:
                 tags.add(t)
     return sorted(tags)
-
-
-def _projects_cooldown(interaction: discord.Interaction) -> app_commands.Cooldown | None:
-    """/projects rate limit: 3 uses per 5 minutes per member. Eboard (and
-    admins, matching is_eboard()) are exempt — returning None skips the
-    cooldown entirely. CommandOnCooldown is handled centrally in bot.py."""
-    member = interaction.user
-    if isinstance(member, discord.Member) and (
-        member.guild_permissions.administrator
-        or member_has_role(member, config.EBOARD_ROLE_NAME)
-    ):
-        return None
-    return app_commands.Cooldown(3, 300.0)
 
 
 def _build_projects_embed(guild: discord.Guild, rows, tag: str | None) -> discord.Embed:
@@ -1479,9 +1467,7 @@ class Projects(commands.Cog):
         description="Browse all projects, optionally filtered by tag.",
     )
     @app_commands.describe(tag="Filter by tag (optional)")
-    @app_commands.checks.dynamic_cooldown(
-        _projects_cooldown, key=lambda i: (i.guild_id, i.user.id)
-    )
+    @spam_cooldown(*BROWSE)  # 3 uses / 5min per member; Eboard exempt
     async def projects_list(self, interaction: discord.Interaction, tag: str | None = None):
         all_rows = await self.bot.db.list_projects(interaction.guild_id)
         if not all_rows:

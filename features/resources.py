@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
+from utils.cooldowns import CHATTY, EXTERNAL, spam_cooldown
 
 log = logging.getLogger("taigabot.resources")
 
@@ -62,6 +63,7 @@ class Resources(commands.Cog):
 
     @app_commands.command(name="paper", description="Search for AI/ML papers.")
     @app_commands.describe(query="Search terms, e.g. 'diffusion models'")
+    @spam_cooldown(*EXTERNAL)  # 1 use / 10s per member; Eboard exempt
     async def paper(self, interaction: discord.Interaction, query: str):
         await interaction.response.defer(thinking=True)
         params = {
@@ -119,6 +121,7 @@ class Resources(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="aiterm", description="Learn an AI term of the day.")
+    @spam_cooldown(*CHATTY)  # 1 use / 5s per member; Eboard exempt
     async def aiterm(self, interaction: discord.Interaction):
         term, definition = random.choice(AI_TERMS)
         embed = discord.Embed(
