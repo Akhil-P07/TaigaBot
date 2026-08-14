@@ -3,7 +3,7 @@ import { Page } from '../components/Layout.jsx'
 import { useMeta } from '../useMeta.js'
 
 const STEPS = [
-  ['Invite the bot', 'Use the invite link below. It requests exactly the permissions TaigaBot needs, and never Administrator.'],
+  ['Invite the bot', 'Use the invite button above. It requests exactly the permissions TaigaBot needs, and never Administrator.'],
   ['Run /setup', 'As the server owner or an administrator, run /setup. A panel appears where you can exclude channels or categories from gating and toggle role reset (read the warning below). It then creates the Verified, Unverified and Eboard roles, the #unverified, #welcome, #mod-log, #taiga-backups and #roles channels, and gates the rest of the server behind verification.'],
   ['Check the Eboard role', 'Give your officers the Eboard role. Every moderation and configuration command is gated behind it.'],
   ['Verify yourself', 'Post in #unverified and follow the OTP prompt to confirm the email flow works end to end.'],
