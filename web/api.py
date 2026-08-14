@@ -14,6 +14,7 @@ import discord
 from aiohttp import web
 
 import config
+from utils import guildutils as gu
 from utils.checks import member_has_role
 from web.auth import current_user, is_owner, require_login, require_owner
 
@@ -21,6 +22,7 @@ log = logging.getLogger("taigabot.web.api")
 
 MAX_SUBJECT = 150
 MAX_BODY = 4000
+MAX_EJECT_REASON = 500
 
 
 def _guild_icon(guild: discord.Guild) -> str:
@@ -228,6 +230,170 @@ async def premium_revoke(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "removed": removed})
 
 
+# ── eject / server bans (owner only) ──────────────────────────────────────────
+
+async def _eject_guild(bot, guild: discord.Guild, reason: str) -> tuple[bool, str]:
+    """Tell the server why, then leave it. Returns (announced, channel name).
+
+    The announcement goes out FIRST: once the bot has left it can't reach the
+    server at all — the same ordering `moderation._dm_action` relies on. Delivery
+    is best-effort, because a server that has locked the bot out of every channel
+    must still be leavable; a failed send is reported, not raised.
+
+    Premium is revoked only after the leave succeeds, so a refused leave changes
+    nothing. Raises discord.HTTPException if Discord refuses.
+    """
+    embed, plain = gu.leaving_embed(reason)
+    channel = await gu.announce_to_guild(guild, embed, plain)
+    await guild.leave()
+    await bot.db.revoke_premium(guild.id)
+    return channel is not None, getattr(channel, "name", "")
+
+
+async def _json_body(request: web.Request) -> dict | None:
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        return None
+    return data if isinstance(data, dict) else None
+
+
+@require_owner
+async def servers_list(request: web.Request) -> web.Response:
+    """Every server the bot is in, plus the ban list — the eject/ban surface."""
+    bot = request.app["bot"]
+    banned = {r["guild_id"]: r for r in await bot.db.list_banned_guilds()}
+
+    servers = []
+    for guild in bot.guilds:
+        servers.append({
+            "id": str(guild.id),
+            "name": guild.name,
+            "icon": _guild_icon(guild),
+            "memberCount": guild.member_count,
+            "tier": await _tier(bot.db, guild.id),
+            # A banned server the bot is still in: banned by ID while it was
+            # offline, or the leave failed. Surfaced so it can be ejected.
+            "banned": guild.id in banned,
+        })
+    servers.sort(key=lambda g: g["name"].lower())
+
+    return web.json_response({
+        "servers": servers,
+        "banned": [
+            {
+                "id": str(gid),
+                # Prefer the live name; fall back to whatever it was called when
+                # it was banned. Blank for servers banned by ID, never joined.
+                "name": (
+                    bot.get_guild(gid).name if bot.get_guild(gid) else row["name"]
+                ) or "(bot never joined)",
+                "reason": row["reason"],
+                "bannedAt": row["banned_at"],
+                "present": bot.get_guild(gid) is not None,
+            }
+            for gid, row in banned.items()
+        ],
+    })
+
+
+@require_owner
+async def guild_eject(request: web.Request) -> web.Response:
+    """Post a reason in the server, leave it, and optionally ban it."""
+    bot = request.app["bot"]
+    gid = int(request.match_info["guild_id"])
+    uid = request["session"]["user_id"]
+
+    data = await _json_body(request)
+    if data is None:
+        return web.json_response({"error": "Expected JSON."}, status=400)
+
+    reason = str(data.get("reason", "")).strip()
+    if not reason:
+        return web.json_response({"error": "A reason is required."}, status=400)
+    if len(reason) > MAX_EJECT_REASON:
+        return web.json_response(
+            {"error": f"Reason max {MAX_EJECT_REASON} characters."}, status=400
+        )
+    ban = bool(data.get("ban"))
+
+    guild = bot.get_guild(gid)
+    if guild is None:
+        return web.json_response({"error": "The bot isn't in that server."}, status=404)
+
+    name = guild.name
+    try:
+        announced, channel = await _eject_guild(bot, guild, reason)
+    except discord.HTTPException:
+        log.exception("Failed to leave guild %s.", gid)
+        return web.json_response(
+            {"error": "Discord refused to remove the bot from that server."}, status=502
+        )
+
+    if ban:
+        await bot.db.ban_guild(gid, name=name, banned_by=uid, reason=reason)
+
+    log.warning(
+        "Ejected from guild %s (%s) by %s%s. Reason: %s",
+        name, gid, uid, " and banned" if ban else "", reason,
+    )
+    return web.json_response(
+        {"ok": True, "announced": announced, "channel": channel, "banned": ban}
+    )
+
+
+@require_owner
+async def ban_add(request: web.Request) -> web.Response:
+    """Block a server from using the bot. If the bot is currently in it, it is
+    ejected too — a ban that leaves the bot sitting in the server does nothing."""
+    bot = request.app["bot"]
+    uid = request["session"]["user_id"]
+
+    data = await _json_body(request)
+    if data is None:
+        return web.json_response({"error": "Expected JSON."}, status=400)
+
+    raw_id = str(data.get("guildId", "")).strip()
+    if not raw_id.isdigit():
+        return web.json_response({"error": "guildId must be numeric."}, status=400)
+    gid = int(raw_id)
+
+    reason = str(data.get("reason", "")).strip()
+    if not reason:
+        return web.json_response({"error": "A reason is required."}, status=400)
+    if len(reason) > MAX_EJECT_REASON:
+        return web.json_response(
+            {"error": f"Reason max {MAX_EJECT_REASON} characters."}, status=400
+        )
+
+    guild = bot.get_guild(gid)
+    name = guild.name if guild else ""
+    announced, channel = False, ""
+    if guild is not None:
+        try:
+            announced, channel = await _eject_guild(bot, guild, reason)
+        except discord.HTTPException:
+            log.exception("Failed to leave guild %s while banning it.", gid)
+            return web.json_response(
+                {"error": "Discord refused to remove the bot from that server."},
+                status=502,
+            )
+
+    await bot.db.ban_guild(gid, name=name, banned_by=uid, reason=reason)
+    log.warning("Banned guild %s (%s) by %s. Reason: %s", name or "unknown", gid, uid, reason)
+    return web.json_response(
+        {"ok": True, "ejected": guild is not None, "announced": announced, "channel": channel}
+    )
+
+
+@require_owner
+async def ban_remove(request: web.Request) -> web.Response:
+    gid = int(request.match_info["guild_id"])
+    removed = await request.app["bot"].db.unban_guild(gid)
+    log.warning("Unbanned guild %s by %s.", gid, request["session"]["user_id"])
+    return web.json_response({"ok": True, "removed": removed})
+
+
 # ── tickets ───────────────────────────────────────────────────────────────────
 
 def _ticket_json(row, bot) -> dict:
@@ -405,6 +571,11 @@ def add_routes(app: web.Application) -> None:
     app.router.add_get("/api/me", me)
     app.router.add_get("/api/guilds", my_guilds)
     app.router.add_get("/api/guilds/{guild_id:\\d+}", guild_detail)
+    app.router.add_post("/api/guilds/{guild_id:\\d+}/eject", guild_eject)
+
+    app.router.add_get("/api/servers", servers_list)
+    app.router.add_post("/api/bans", ban_add)
+    app.router.add_delete("/api/bans/{guild_id:\\d+}", ban_remove)
 
     app.router.add_get("/api/premium", premium_list)
     app.router.add_post("/api/premium", premium_grant)

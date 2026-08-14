@@ -9,6 +9,7 @@ import Legal from './pages/Legal.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import ServerDetail from './pages/ServerDetail.jsx'
 import AdminPremium from './pages/AdminPremium.jsx'
+import AdminServers from './pages/AdminServers.jsx'
 import Tickets from './pages/Tickets.jsx'
 import TicketDetail from './pages/TicketDetail.jsx'
 
@@ -38,6 +39,10 @@ export default function App() {
         <Route
           path="/admin/premium"
           element={<Protected ownerOnly><AdminPremium /></Protected>}
+        />
+        <Route
+          path="/admin/servers"
+          element={<Protected ownerOnly><AdminServers /></Protected>}
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />

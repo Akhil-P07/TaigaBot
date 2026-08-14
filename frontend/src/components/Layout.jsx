@@ -1,10 +1,20 @@
-import { Link, NavLink } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth.jsx'
 import { useMeta } from '../useMeta.js'
 
 export function Nav() {
   const { user, logout } = useAuth()
   const authed = user?.authenticated
+  const links = useRef(null)
+  const { pathname } = useLocation()
+
+  // On narrow screens the link strip scrolls sideways rather than wrapping, so
+  // the current page's link can start out off-screen. Pull it into view.
+  useEffect(() => {
+    links.current?.querySelector('a.active')
+      ?.scrollIntoView({ inline: 'center', block: 'nearest' })
+  }, [pathname])
 
   return (
     <nav className="nav">
@@ -13,11 +23,12 @@ export function Nav() {
           <img src="/assets/TaigaBot.png" alt="" />
           <span>TaigaBot</span>
         </Link>
-        <div className="nav-links">
+        <div className="nav-links" ref={links}>
           <NavLink to="/commands">Commands</NavLink>
           <NavLink to="/setup">Setup</NavLink>
           {authed && <NavLink to="/tickets">Support</NavLink>}
           {user?.isOwner && <NavLink to="/admin/premium">Premium</NavLink>}
+          {user?.isOwner && <NavLink to="/admin/servers">Servers</NavLink>}
           {authed ? (
             <>
               <NavLink className="btn small" to="/dashboard">Manage Server</NavLink>

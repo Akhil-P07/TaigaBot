@@ -172,6 +172,18 @@ CREATE TABLE IF NOT EXISTS premium_guilds (
     note       TEXT    NOT NULL DEFAULT ''
 );
 
+-- Servers blocked from using TaigaBot. Checked on join, so a banned server that
+-- re-invites the bot is told why and dropped again. `name` is the guild's name at
+-- ban time, kept so the dashboard list still reads well for servers the bot has
+-- never been in or can no longer see.
+CREATE TABLE IF NOT EXISTS banned_guilds (
+    guild_id  INTEGER PRIMARY KEY,
+    name      TEXT    NOT NULL DEFAULT '',
+    banned_by INTEGER NOT NULL DEFAULT 0,
+    banned_at INTEGER NOT NULL DEFAULT 0,
+    reason    TEXT    NOT NULL DEFAULT ''
+);
+
 -- Dashboard login sessions. The token here is the *hash* of the cookie value,
 -- never the value itself: a stolen database then can't be replayed as a login.
 CREATE TABLE IF NOT EXISTS web_sessions (
@@ -1036,6 +1048,50 @@ class Database:
     async def list_premium(self) -> list[aiosqlite.Row]:
         cur = await self.conn.execute(
             "SELECT * FROM premium_guilds ORDER BY granted_at DESC"
+        )
+        return list(await cur.fetchall())
+
+    # ── banned servers ────────────────────────────────────────────────────────
+
+    async def is_guild_banned(self, guild_id: int) -> bool:
+        """True if this server is blocked from using the bot. Bans never expire —
+        they're lifted explicitly from the dashboard."""
+        cur = await self.conn.execute(
+            "SELECT 1 FROM banned_guilds WHERE guild_id = ?", (guild_id,)
+        )
+        return await cur.fetchone() is not None
+
+    async def ban_guild(
+        self, guild_id: int, name: str = "", banned_by: int = 0, reason: str = ""
+    ) -> None:
+        async with self._tx():
+            await self.conn.execute(
+                """INSERT INTO banned_guilds (guild_id, name, banned_by, banned_at, reason)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(guild_id) DO UPDATE SET
+                       name      = excluded.name,
+                       banned_by = excluded.banned_by,
+                       banned_at = excluded.banned_at,
+                       reason    = excluded.reason""",
+                (guild_id, name[:100], banned_by, int(time.time()), reason[:300]),
+            )
+
+    async def unban_guild(self, guild_id: int) -> bool:
+        async with self._tx():
+            cur = await self.conn.execute(
+                "DELETE FROM banned_guilds WHERE guild_id = ?", (guild_id,)
+            )
+        return cur.rowcount > 0
+
+    async def get_guild_ban(self, guild_id: int) -> aiosqlite.Row | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM banned_guilds WHERE guild_id = ?", (guild_id,)
+        )
+        return await cur.fetchone()
+
+    async def list_banned_guilds(self) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT * FROM banned_guilds ORDER BY banned_at DESC"
         )
         return list(await cur.fetchall())
 
