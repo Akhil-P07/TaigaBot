@@ -66,6 +66,105 @@ def backups_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return get_channel(guild, config.BACKUP_CHANNEL_NAME)
 
 
+def general_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    return get_channel(guild, config.GENERAL_CHANNEL_NAME)
+
+
+def _can_post(guild: discord.Guild, channel: discord.TextChannel | None) -> bool:
+    if channel is None:
+        return False
+    perms = channel.permissions_for(guild.me)
+    return perms.view_channel and perms.send_messages
+
+
+def first_sendable_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    """The best channel for an announcement that MUST land somewhere: mod-log,
+    then general, then the server's system channel, then any text channel the bot
+    can actually post in. Returns None if the bot can post nowhere.
+
+    Unlike `modlog_channel`, this never gives up just because the configured
+    channel is missing — it's for messages (e.g. "the bot is leaving") that have
+    no second chance to be delivered.
+    """
+    preferred = (modlog_channel(guild), general_channel(guild), guild.system_channel)
+    for channel in preferred:
+        if isinstance(channel, discord.TextChannel) and _can_post(guild, channel):
+            return channel
+    for channel in guild.text_channels:
+        if _can_post(guild, channel):
+            return channel
+    return None
+
+
+async def announce_to_guild(
+    guild: discord.Guild, embed: discord.Embed, plain: str
+) -> discord.TextChannel | None:
+    """Post `embed` to `first_sendable_channel`, falling back to `plain` text if
+    the channel forbids embeds. Returns the channel it landed in, or None.
+
+    Best-effort by design: callers use this immediately before something
+    irreversible (leaving the server), so a delivery failure must never raise.
+    """
+    channel = first_sendable_channel(guild)
+    if channel is None:
+        return None
+    try:
+        await channel.send(embed=embed)
+        return channel
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    try:
+        await channel.send(plain)
+        return channel
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+
+
+def _site_line(suffix: str = "") -> str:
+    """'…from https://taigabot.example' — or nothing when PUBLIC_BASE_URL is unset,
+    the same way web.server._invite_url degrades."""
+    return f"{config.PUBLIC_BASE_URL}{suffix}" if config.PUBLIC_BASE_URL else ""
+
+
+def leaving_embed(reason: str) -> tuple[discord.Embed, str]:
+    """The notice posted in a server just before the bot is ejected from it.
+    Returns (embed, plain-text equivalent). Deliberately does not name the
+    maintainer who ejected the server."""
+    site = _site_line()
+    tail = (
+        f"A server admin can re-invite the bot at any time from {site}"
+        if site else "A server admin can re-invite the bot at any time."
+    )
+    embed = discord.Embed(
+        title="🚪 TaigaBot is leaving this server",
+        description=tail,
+        colour=discord.Colour.orange(),
+    )
+    # Discord rejects an empty field value; bans made without a reason are possible.
+    embed.add_field(name="Reason", value=reason or "No reason given.", inline=False)
+    return embed, f"**TaigaBot is leaving this server.**\nReason: {reason}\n{tail}"
+
+
+def blocked_embed(reason: str) -> tuple[discord.Embed, str]:
+    """The notice posted when a banned server invites the bot back."""
+    site = _site_line()
+    tail = (
+        f"Think this is a mistake? Open a ticket at {site}"
+        if site else "Think this is a mistake? Contact the bot maintainer."
+    )
+    embed = discord.Embed(
+        title="🚫 TaigaBot can't be added to this server",
+        description=f"This server has been blocked from using TaigaBot.\n\n{tail}",
+        colour=discord.Colour.red(),
+    )
+    # Discord rejects an empty field value; bans made without a reason are possible.
+    embed.add_field(name="Reason", value=reason or "No reason given.", inline=False)
+    return embed, (
+        f"**This server has been blocked from using TaigaBot.**\n"
+        f"Reason: {reason}\n{tail}"
+    )
+
+
 async def promote_to_verified(member: discord.Member) -> bool:
     """Give the member the Verified role and strip Unverified, in their guild.
 

@@ -21,6 +21,7 @@ import config
 import personality
 from database import Database
 from web.server import start_web
+from utils import guildutils as gu
 from utils.checks import NotBotOwner, NotEboard
 
 logging.basicConfig(
@@ -78,11 +79,40 @@ class TaigaBot(commands.Bot):
                 config.GUILD_ID,
             )
 
+    async def _enforce_ban(self, guild: discord.Guild) -> bool:
+        """Leave `guild` if it's on the ban list, telling it why first. True if
+        the bot left. Delivery is best-effort — the leave happens regardless."""
+        row = await self.db.get_guild_ban(guild.id)
+        if row is None:
+            return False
+        embed, plain = gu.blocked_embed(row["reason"])
+        await gu.announce_to_guild(guild, embed, plain)
+        try:
+            await guild.leave()
+        except discord.HTTPException:
+            log.exception("Banned guild %s (%s) — leave failed.", guild.name, guild.id)
+            return False
+        log.warning(
+            "Refused banned guild: %s (id=%s). Reason: %s",
+            guild.name, guild.id, row["reason"],
+        )
+        return True
+
     async def on_guild_join(self, guild: discord.Guild) -> None:
+        if await self._enforce_ban(guild):
+            return
         log.info("Joined guild: %s (id=%s, %d members)", guild.name, guild.id, guild.member_count)
+
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        log.info("Left guild: %s (id=%s)", guild.name, guild.id)
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)
+        # Catches servers banned by ID while the bot was already in them, or
+        # invited while this process was down. Idempotent, so re-firing on a
+        # gateway reconnect is harmless.
+        for guild in list(self.guilds):
+            await self._enforce_ban(guild)
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching, name="/verify | AI Club 🐯"

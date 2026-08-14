@@ -33,6 +33,12 @@ export const api = {
     request('/api/premium', { method: 'POST', body: { guildId, days, note } }),
   premiumRevoke: (guildId) => request(`/api/premium/${guildId}`, { method: 'DELETE' }),
 
+  servers: () => request('/api/servers'),
+  guildEject: (guildId, reason, ban) =>
+    request(`/api/guilds/${guildId}/eject`, { method: 'POST', body: { reason, ban } }),
+  banAdd: (guildId, reason) => request('/api/bans', { method: 'POST', body: { guildId, reason } }),
+  banRemove: (guildId) => request(`/api/bans/${guildId}`, { method: 'DELETE' }),
+
   tickets: (scope, status) => {
     const q = new URLSearchParams()
     if (scope) q.set('scope', scope)
