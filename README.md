@@ -1,6 +1,6 @@
 # 🐯 TaigaBot
 
-A Discord bot for the **RIT AI Club**: university-email verification, channel
+A Discord bot for **RIT Servers** initially made for the RIT AI Club: university-email verification, channel
 gating, auto-moderation, leveling, reaction roles, a project system, an AI
 assistant, a news-feed watcher, automatic backups, and a tsundere personality.
 It also ships a **web dashboard** (React) where Eboard can see their servers and
