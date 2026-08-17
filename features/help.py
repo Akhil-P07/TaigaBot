@@ -104,8 +104,7 @@ class Help(commands.Cog):
                 name="🔧 Server",
                 value=(
                     "`/setup` — *owner/admin only:* create roles/channels & gate the server\n"
-                    "`/health` — config & role/channel status\n"
-                    "`/backup` — back up this server's member roster now"
+                    "`/health` — config & role/channel status"
                 ),
                 inline=False,
             )

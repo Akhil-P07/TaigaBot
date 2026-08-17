@@ -60,7 +60,6 @@ UNVERIFIED_CHANNEL_NAME: str = _get("UNVERIFIED_CHANNEL_NAME", "unverified")
 WELCOME_CHANNEL_NAME: str = _get("WELCOME_CHANNEL_NAME", "welcome")
 MODLOG_CHANNEL_NAME: str = _get("MODLOG_CHANNEL_NAME", "mod-log")
 GENERAL_CHANNEL_NAME: str = _get("GENERAL_CHANNEL_NAME", "general")
-BACKUP_CHANNEL_NAME: str = _get("BACKUP_CHANNEL_NAME", "taiga-backups")
 ROLES_CHANNEL_NAME: str = _get("ROLES_CHANNEL_NAME", "roles")
 
 
@@ -87,15 +86,6 @@ RESET_ROLES_ON_SETUP: bool = _flag("RESET_ROLES_ON_SETUP", "0")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH: str = _get("DB_PATH", "taigabot.db")
-
-# ── Backups ──────────────────────────────────────────────────────────────────
-# /setup auto-creates an Eboard-only channel named BACKUP_CHANNEL_NAME and the
-# bot uploads verified-member rosters there. BACKUP_CHANNEL_ID is an optional
-# override to point backups at a specific channel by ID instead of by name.
-BACKUP_CHANNEL_ID: int | None = (
-    int(_get("BACKUP_CHANNEL_ID")) if _get("BACKUP_CHANNEL_ID").isdigit() else None
-)
-BACKUP_INTERVAL_HOURS: int = int(_get("BACKUP_INTERVAL_HOURS", "12"))
 
 # ── Gemini AI assistant (/ask) ───────────────────────────────────────────────
 # Free Gemini API key from https://aistudio.google.com/apikey . Leave blank to

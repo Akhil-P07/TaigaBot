@@ -301,12 +301,6 @@ class Setup(commands.Cog):
             modlog_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
         await self._set_perms(modlog_ch, eboard, view_channel=True, reason="TaigaBot setup")
-        # #taiga-backups: Eboard only — holds member rosters (names + emails).
-        backups_ch = await self._ensure_channel(guild, config.BACKUP_CHANNEL_NAME)
-        await self._set_perms(
-            backups_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
-        )
-        await self._set_perms(backups_ch, eboard, view_channel=True, reason="TaigaBot setup")
         # #roles: where verified members self-assign interest roles (set up with
         # /reactionrole). Visible + reactable to Verified, but read-only.
         roles_ch = await self._ensure_channel(guild, config.ROLES_CHANNEL_NAME)
@@ -319,8 +313,8 @@ class Setup(commands.Cog):
         )
         # Grant TaigaBot itself access to the channels it posts in — otherwise the
         # @everyone view/send deny above also locks the bot out (it's just an
-        # @everyone member for permissions), breaking welcome/mod-log/backups/roles.
-        for ch in (unverified_ch, welcome_ch, modlog_ch, backups_ch, roles_ch):
+        # @everyone member for permissions), breaking welcome/mod-log/roles.
+        for ch in (unverified_ch, welcome_ch, modlog_ch, roles_ch):
             await self._set_perms(
                 ch, guild.me, view_channel=True, send_messages=True,
                 embed_links=True, attach_files=True, add_reactions=True,
@@ -328,8 +322,21 @@ class Setup(commands.Cog):
             )
         steps.append(
             f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, "
-            f"{modlog_ch.mention}, {backups_ch.mention}, {roles_ch.mention}"
+            f"{modlog_ch.mention}, {roles_ch.mention}"
         )
+
+        # The retired backup feature used to keep an Eboard-only #taiga-backups
+        # here, exempt from gating. It is no longer a core channel, so the gating
+        # pass below now treats it like any other: hidden from @everyone but
+        # readable by Verified — and the roster CSVs still sitting in it hold real
+        # names and emails. Say so loudly; deleting it is the Eboard's call.
+        leftover_backups = gu.get_channel(guild, "taiga-backups")
+        if leftover_backups is not None:
+            steps.append(
+                f"⚠️ {leftover_backups.mention} is left over from the removed backup "
+                "feature and is now visible to **Verified** members. Any roster files "
+                "in it contain members' real names and emails — delete the channel."
+            )
 
         # 3. Gate every OTHER channel/category behind the Verified role
         #    (allowlist / default-deny): @everyone can't see it, Verified and
@@ -337,7 +344,7 @@ class Setup(commands.Cog):
         #    verify — safe even if the bot was offline when they joined. Covers
         #    categories and voice channels, not just text.
         core_ids = {
-            unverified_ch.id, welcome_ch.id, modlog_ch.id, backups_ch.id, roles_ch.id,
+            unverified_ch.id, welcome_ch.id, modlog_ch.id, roles_ch.id,
         }
         # ignore_ids was built above: env GATING_IGNORE merged with interactive picks
         gated = 0

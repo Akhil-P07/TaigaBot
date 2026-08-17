@@ -390,19 +390,6 @@ class Database:
             await self.conn.rollback()
             raise
 
-    async def snapshot(self, dest_path: str) -> None:
-        """Write a consistent copy of the WHOLE DB to dest_path.
-
-        Uses SQLite's online backup API, so it's safe to call while the bot is
-        running and writing — unlike a plain file copy, which can capture a
-        half-written database.
-        """
-        dest = await aiosqlite.connect(dest_path)
-        try:
-            await self.conn.backup(dest)
-        finally:
-            await dest.close()
-
     # ── verified users ────────────────────────────────────────────────────
     async def email_is_registered(self, email: str) -> bool:
         cur = await self.conn.execute(

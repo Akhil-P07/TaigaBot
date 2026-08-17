@@ -285,8 +285,9 @@ class News(commands.Cog):
             if guild is None:
                 continue
             channel = guild.get_channel(sub["channel_id"])
-            # Same guard as features/backup.py: confirm the channel is still in
-            # this guild and still postable before trying.
+            # Confirm the channel still exists AND still belongs to this guild
+            # before posting — a stale subscription can otherwise point at a
+            # channel the bot only knows from somewhere else.
             if channel is None or getattr(channel, "guild", None) != guild:
                 log.warning(
                     "News channel %s is gone in guild %s; skipping.",

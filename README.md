@@ -1,10 +1,11 @@
 # 🐯 TaigaBot
 
-A Discord bot for **RIT Servers** initially made for the RIT AI Club: university-email verification, channel
-gating, auto-moderation, leveling, reaction roles, a project system, an AI
-assistant, a news-feed watcher, automatic backups, and a tsundere personality.
-It also ships a **web dashboard** (React) where Eboard can see their servers and
-the bot owner manages premium tiers and support tickets.
+A Discord bot for **RIT servers**, originally built for the RIT AI Club. It
+handles university-email verification, channel gating, auto-moderation, leveling,
+reaction roles, a project system, an AI assistant, and a news-feed watcher, all
+with a tsundere personality. It also ships a **web dashboard** (React) where
+Eboard can see their servers and the bot owner manages premium tiers and support
+tickets.
 
 Every feature is a self-contained module in [`features/`](features/) that the bot
 auto-loads on startup, so you add or remove features just by adding/deleting
@@ -12,18 +13,18 @@ files there.
 
 **Multi-guild:** slash commands sync globally, so the bot works in **every server
 it's invited to**. Per-server data (warnings, banned words, automod settings,
-reaction roles, projects) is keyed by guild. Two exceptions are global — shared
+reaction roles, projects) is keyed by guild. Two exceptions are global, shared
 across every server: a member's **XP / level** (so their rank follows them
 everywhere) and their verification status (see the verification note below).
 
 > **Cross-server repeat-offender marker:** warnings stay per-server, but `/whois`
 > and the spam auto-warn alert show Eboard a privacy-preserving **count** of
-> how many *other* TaigaBot servers have also warned that user (a number only — no
-> names or details), so a repeat offender across clubs is visible without exposing
+> how many *other* TaigaBot servers have also warned that user (a number only, with
+> no names or details), so a repeat offender across clubs is visible without exposing
 > another server's moderation history.
 >
 > That count is keyed to the member's **RIT identity** (the student ID in their
-> verified email), not their Discord account — so switching accounts, using
+> verified email), not their Discord account, so switching accounts, using
 > `/recover`, or verifying on the other RIT domain doesn't reset it. Each warning
 > is stamped with that identity when it's issued; unverified members are still
 > counted by Discord account.
@@ -45,13 +46,12 @@ everywhere) and their verification status (see the verification note below).
 | **Premium tier** | `features/premium.py` | `/premium` (read-only; granted on the dashboard) |
 | **Leveling / XP** | `features/leveling.py` | `/rank`, `/leaderboard` |
 | **Reaction roles** | `features/reactionroles.py` | `/reactionrole post\|add\|remove\|list` (Eboard) |
-| **Backups** | `features/backup.py` | `/backup` (Eboard) |
 | **Tsundere personality** | `features/personality.py` | `/taiga`, `/hello` |
 | **Help** | `features/help.py` | `/help` |
 
 Moderation/admin commands require the **Eboard** role (server admins always pass).
-`/help` is open to everyone, but shows the full Eboard reference only to
-Eboard/admins and the member list to everyone else.
+`/help` is open to everyone: Eboard and admins get the full reference, while
+everyone else sees the member commands.
 
 ---
 
@@ -70,11 +70,11 @@ py -m pip install -r requirements.txt
 4. To run on servers other than your own, enable **Public Bot**. (Discord requires
    app verification past **100 servers** to keep the privileged intents.)
 5. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`; bot
-   permissions: *View Audit Log, Manage Roles, Manage Channels, Kick, Ban, View Channels, Moderate Members, Send Messages, Manage Messages, Embed Links,  Read Message History, Add Reactions, Use Slash Commands, Bypass Slowmode*. Open/share the URL
+   permissions: *View Audit Log, Manage Roles, Manage Channels, Kick, Ban, View Channels, Moderate Members, Send Messages, Manage Messages, Embed Links, Read Message History, Add Reactions, Use Slash Commands, Bypass Slowmode*. Open/share the URL
    to invite the bot.
 
    > **View Channels** and **Use Application Commands** are easy to miss but
-   > **required** — Discord only lets a bot edit a channel's `view_channel` /
+   > **required**: Discord only lets a bot edit a channel's `view_channel` /
    > `use_application_commands` overwrites if the bot *holds* those permissions.
    > Without them, `/setup` can't gate channels ("Missing Access").
 
@@ -83,7 +83,7 @@ OTP codes are sent via **Brevo's HTTP API** (port 443) rather than SMTP, since
 hosts like **Railway/Render block outbound SMTP**. Create a free
 [Brevo](https://app.brevo.com) account, then:
 1. **Senders & IPs** → add and verify your sender email (click the link in the
-   confirmation email — **no domain required**).
+   confirmation email; **no domain required**).
 2. **SMTP & API → API Keys** → create a key.
 
 Put the key in `BREVO_API_KEY` and the verified address in `EMAIL_FROM`. (Brevo's
@@ -102,7 +102,7 @@ To enable the **web dashboard** as well, set `DISCORD_CLIENT_SECRET`,
 `PUBLIC_BASE_URL`, `SESSION_SECRET` and `BOT_OWNER_IDS`, and add
 `<PUBLIC_BASE_URL>/api/auth/callback` to **OAuth2 → Redirects** in the Developer
 Portal. See [Web dashboard](#web-dashboard). Without them the public site still
-works — nobody can just sign in.
+works; nobody can just sign in.
 
 ### 5. Run
 ```powershell
@@ -116,8 +116,8 @@ menu to **exclude** any categories/channels from gating and a toggle for the
 **role reset** (both below), then runs.
 
 It creates the roles (`Unverified`, `Verified`, `Eboard`) and channels
-(`#unverified`, `#welcome`, `#mod-log`, `#taiga-backups`, `#roles`), then **gates
-every channel behind the `Verified` role** (default-deny): `@everyone` is denied
+(`#unverified`, `#welcome`, `#mod-log`, `#roles`), then **gates every channel
+behind the `Verified` role** (default-deny): `@everyone` is denied
 view; only `Verified`/`Eboard` can see them. `#unverified` is the verification
 landing, `#welcome` is a public read-only channel anyone can `/verify` from, and
 `#roles` is where verified members self-assign roles. Finally it assigns
@@ -125,14 +125,14 @@ landing, `#welcome` is a public read-only channel anyone can `/verify` from, and
 
 Access is driven by *having* `Verified`, so a member with no roles (e.g. someone
 who joined while the bot was asleep) sees nothing until they verify. `/setup` is
-idempotent — re-run any time.
+idempotent, so you can re-run it any time.
 
 > **Important:** drag **TaigaBot's role above** `Unverified`/`Verified`/project
 > roles in *Server Settings → Roles*, or it can't manage them. `/setup` checks
 > its own permissions first and reports which channels it gated or skipped.
 >
 > **Already-private channels** (those that already deny `@everyone` view) are
-> invisible to the bot and can't be gated — they show under "Couldn't edit …".
+> invisible to the bot and can't be gated; they show under "Couldn't edit …".
 > Grant TaigaBot **View Channel** on them, or run `/setup` once with the bot
 > temporarily set to Administrator, then re-run.
 
@@ -164,18 +164,18 @@ TaigaBot) so nobody keeps old access until they re-verify and re-pick in `#roles
 
 One RIT account = one membership: `jdoe@rit.edu` and `jdoe@g.rit.edu` are treated
 as the same person (matched on the part before the `@`). A member who verified on
-one server the bot is in is auto-granted `Verified` when joining another — no
+one server the bot is in is auto-granted `Verified` when joining another, with no
 re-verification needed. Eboard can look up a member with `/whois @member`.
 
 **Lost your Discord account?** Run `/recover email:<your RIT email>` on the new
 account and confirm the emailed code. This **moves** your verification to the new
 account and **automatically removes the Verified role from the old account across
-every server** — no Eboard action needed. It's a *move*, not a copy, so only one
+every server**, with no Eboard action needed. It's a *move*, not a copy, so only one
 account per RIT email is ever verified (no alt stacking), and it's rate-limited to
 once per identity per **7 days** (`RECOVERY_COOLDOWN_DAYS`) and logged to
 `#mod-log`.
 
-> **Multi-guild note:** verification settings are *global* — the allowed email
+> **Multi-guild note:** verification settings are *global*. The allowed email
 > domains and the sending address come from `.env` and apply to every server the
 > bot is in. It's built for a single university club. Everything else is per-server.
 
@@ -185,35 +185,35 @@ once per identity per **7 days** (`RECOVERY_COOLDOWN_DAYS`) and logged to
 
 A lightweight project directory with self-service joining.
 
-- **`/createproject lead:@member`** (Eboard) — pick the primary team lead (real
+- **`/createproject lead:@member`** (Eboard): pick the primary team lead (real
   member picker), then a form for name, description, and tags. Choose (or create)
   a category and optionally **add co-leads** from a member dropdown. The bot
   creates a **project role** (given to every lead immediately), a **channel**
   gated to that role, an intro message, and a DB record. Joining is via
   `/joinproject` (lead approval), so **no self-assign reaction role is created**.
-  If the name matches an existing project, **no new channel is made** — you pick
+  If the name matches an existing project, **no new channel is made**: you pick
   the existing role's `@` and the bot links them to that channel instead.
-- **`/editproject`** (Eboard) — pick a project; a form opens **prefilled** with its
+- **`/editproject`** (Eboard): pick a project; a form opens **prefilled** with its
   name/description/tags. Saving updates the record, renames the role/channel if the
   name changed, and **deletes + reposts** the intro message with the new details.
-- **`/projects [tag]`** — browse all projects; includes a **scrollable tag
+- **`/projects [tag]`**: browse all projects; includes a **scrollable tag
   dropdown** to filter without typing.
-- **`/projecttags`** — list every tag and how many projects use it.
-- **`/deletetag [tag]`** (Eboard) — remove a tag from every project. Run it
+- **`/projecttags`**: list every tag and how many projects use it.
+- **`/deletetag [tag]`** (Eboard): remove a tag from every project. Run it
   blank for a dropdown picker; the picker re-reads the database after every
   deletion, so you can clear several tags in one sitting and never see a
   stale option.
-- **`/joinproject [tag]`** — anyone picks a project from a dropdown and requests to
+- **`/joinproject [tag]`**: anyone picks a project from a dropdown and requests to
   join. **Every lead gets a DM** with Approve/Deny buttons (which survive
   restarts); any lead can decide (first to act wins). On approval the role is
   granted automatically; either way the requester is DM'd the outcome.
-  Projects tagged **`open-source`** skip approval entirely — `/joinproject` grants
+  Projects tagged **`open-source`** skip approval entirely: `/joinproject` grants
   the role instantly (tag match is case/space/hyphen-insensitive).
-- **`/leaveproject`** — leave a project you're in; drops its role. **Project leads
-  can't leave this way** (they'd orphan the project) — an Eboard member uses
+- **`/leaveproject`**: leave a project you're in; drops its role. **Project leads
+  can't leave this way** (they'd orphan the project), so an Eboard member uses
   `/dropproject` instead.
-- **`/dropproject`** (Eboard) — select a project to delete its channel and role.
-- **`/unlist`** (Eboard) — retire a project **without losing the channel**: removes
+- **`/dropproject`** (Eboard): select a project to delete its channel and role.
+- **`/unlist`** (Eboard): retire a project **without losing the channel** — removes
   its database entry, deletes the project role (and any reaction-role binding to
   it), re-gates the channel to **Eboard only**, and takes the shared **Project
   Lead** role off its leads (unless they lead another project). The channel and its
@@ -225,7 +225,7 @@ A lightweight project directory with self-service joining.
 
 **Recommended:** put your projects in one category and **exclude that category**
 from gating (see above) so project channels stay visible only to their role
-holders — i.e. a member must verify *and* hold the project role to see it.
+holders. A member must verify *and* hold the project role to see them.
 
 ---
 
@@ -241,7 +241,7 @@ credits"**. `GEMINI_MODEL` selects the model (default `gemini-2.0-flash`).
 ## News watcher (`/news`)
 
 Follows **any** news site or blog with an RSS/Atom feed and posts new articles to
-a channel you pick — club news, a department blog, a game's patch notes, a
+a channel you pick: club news, a department blog, a game's patch notes, a
 subreddit, whatever the server wants.
 
 ```
@@ -251,7 +251,7 @@ subreddit, whatever the server wants.
 ```
 
 `name` is what the source is called in the embeds it posts, and it belongs to the
-subscription rather than the feed — two servers watching the same URL can each
+subscription rather than the feed, so two servers watching the same URL can each
 call it whatever makes sense to them. A custom feed added without a `name` is
 auto-named `Custom 1`, `Custom 2`, … (numbered per server, and never reusing a
 removed feed's number), so every source can be picked from a list by name rather
@@ -266,8 +266,8 @@ saving it.
 Pick **Custom** and paste a feed URL for anything else. Two AI sources are built
 in purely as one-click shortcuts, since this started as an AI-club bot:
 
-- **OpenAI** — a real RSS 2.0 feed at `openai.com/news/rss.xml`.
-- **Anthropic** — has **no RSS feed** (`/rss.xml` and `/news/rss.xml` both 404),
+- **OpenAI**: a real RSS 2.0 feed at `openai.com/news/rss.xml`.
+- **Anthropic**: has **no RSS feed** (`/rss.xml` and `/news/rss.xml` both 404),
   so the bot reads `sitemap.xml`, filters to `/news/` paths, and fetches each new
   article once for its `og:title`/`og:description`. `robots.txt` permits this.
 
@@ -281,19 +281,19 @@ latest item from a source without posting or marking anything seen.
 - **Feeds are polled per URL, not per server.** Twenty servers watching OpenAI
   cost one request per cycle, not twenty.
 - **Unchanged feeds skip parsing.** Neither source sends `ETag`/`Last-Modified`,
-  so the usual 304 trick rarely fires; the bot hashes the body instead — ~1 ms to
-  hash 640 KB versus ~36 ms to parse it.
+  so the usual 304 trick rarely fires; the bot hashes the body instead, taking
+  ~1 ms to hash 640 KB versus ~36 ms to parse it.
 - Polls are floored at 15 minutes, bodies capped at 4 MiB, and each guild is
   capped at `NEWS_MAX_CUSTOM_FEEDS` custom feeds (raised for premium servers).
   That cap is what bounds total polling work across the whole deployment.
 
 Subscribing **seeds the feed as already-seen**, so adding OpenAI doesn't dump a
 thousand back-articles into your channel. Parsing uses only `xml.etree` from the
-standard library — no `feedparser`, no `beautifulsoup4` — to keep the image small.
+standard library (no `feedparser`, no `beautifulsoup4`) to keep the image small.
 
 > **Custom URLs are user-supplied, so they're treated as an SSRF risk:** HTTPS
 > only, port 443 only, and every address the host resolves to must be publicly
-> routable — re-checked on each redirect, since a public host can 302 to
+> routable, re-checked on each redirect, since a public host can 302 to
 > `169.254.169.254`. Feeds are validated at `/news add` time so a bad URL fails
 > loudly there rather than silently in the background loop.
 
@@ -302,7 +302,7 @@ standard library — no `feedparser`, no `beautifulsoup4` — to keep the image 
 ## Web dashboard
 
 A React app in [`frontend/`](frontend/), served by the bot's own HTTP server
-(`web/server.py`) — same process, same SQLite file, no second service to deploy.
+(`web/server.py`): same process, same SQLite file, no second service to deploy.
 
 - **Sign in with Discord** (`identify` scope only). Which servers you can manage
   is derived from the bot's own membership data, so the bot **never asks Discord
@@ -329,7 +329,7 @@ Premium is a per-server tier that raises limits (today: custom news feeds,
 on it with `await bot.db.is_premium(guild_id)`.
 
 **Payment is handled offline.** There is deliberately no payment processor,
-webhook, or self-serve upgrade in this codebase — the owner takes payment however
+webhook, or self-serve upgrade in this codebase. The owner takes payment however
 they like, then grants the tier from the dashboard with an optional expiry and a
 note. In Discord, `/premium` only *reports* a server's tier; it can't grant one,
 so no server can upgrade itself.
@@ -347,21 +347,21 @@ The dashboard is the bot's only internet-facing surface, so:
 - `Cache-Control: no-store` on every `/api` response;
 - session tokens stored **hashed**, so a leaked database can't be replayed as a
   login;
-- generic 500s — exception detail goes to the log, never to the client.
+- generic 500s, with exception detail going to the log and never to the client.
 
 ---
 
 ## Phishing / scam detection
 
-The `phishing` automod filter catches scam messages — fake Nitro/Steam gifts,
-"free giveaway" link drops, malware `.exe`s — that a static word list misses. It
+The `phishing` automod filter catches scam messages that a static word list
+misses: fake Nitro/Steam gifts, "free giveaway" link drops, and malware `.exe`s. It
 uses a small machine-learning model trained offline on the
 [`wangyuancheng/discord-phishing-scam-clean`](https://huggingface.co/datasets/wangyuancheng/discord-phishing-scam-clean)
 dataset (1,830 labelled Discord messages).
 
 - **Runs on-device, cheap.** The trained model ships as a ~55 KB JSON of token
   weights ([`dataset/phishing_model.json`](dataset/phishing_model.json)). At
-  runtime the bot just tokenises the message and sums weights — pure Python, no
+  runtime the bot just tokenises the message and sums weights: pure Python, no
   extra dependencies, well under a megabyte of RAM, so it's happy on a 500 MB
   Railway instance. No message data ever leaves the bot.
 - **Tuned for precision** (~0.94 on held-out data) so real members' messages
@@ -384,57 +384,57 @@ dataset (1,830 labelled Discord messages).
 
 ## Customizing
 
-- **Tsundere lines** — [`personality.py`](personality.py); set `ENABLED = False`
+- **Tsundere lines**: [`personality.py`](personality.py); set `ENABLED = False`
   for a plain bot.
-- **Email domains / role & channel names / OTP timeout / Gemini model** — `.env`.
-- **Banned words** — live via `/automod addword` / `/automod removeword`
+- **Email domains / role & channel names / OTP timeout / Gemini model**: `.env`.
+- **Banned words**: live via `/automod addword` / `/automod removeword`
   (per-server). Both take comma-separated lists to add or remove several at
   once (lowercased, trimmed, deduped).
-- **Automod exemptions** — `/automod exempt target:#channel-or-category
+- **Automod exemptions**: `/automod exempt target:#channel-or-category
   [filter]` turns off one filter (or all of automod, the default) in that
   place: a category covers every channel and thread inside it, and a channel's
   exemption covers its threads. `/automod unexempt` reverses it, and
   `/automod status` lists exemptions grouped by filter. Exemptions are stored
-  per-server and included in backups.
-- **Spam thresholds & auto-warn** — constants at the top of
+  per-server.
+- **Spam thresholds & auto-warn**: constants at the top of
   [`features/moderation.py`](features/moderation.py) (`SPAM_*`, `AUTOWARN_*`).
   Caught spammers are auto-warned; the Eboard is DMed only once a user hits
   `SPAM_WARN_ESCALATE` total warnings (and each multiple after), so their DMs
   aren't flooded.
-- **Phishing/scam filter** — see [Phishing / scam detection](#phishing--scam-detection)
+- **Phishing/scam filter**: see [Phishing / scam detection](#phishing--scam-detection)
   above; retrain with `python dataset/train_phishing_model.py`, tune
   `TARGET_PRECISION` in that script to trade recall for precision.
-- **Contact-info / solicitation filter** — deletes messages sharing personal
+- **Contact-info / solicitation filter**: deletes messages sharing personal
   phone numbers or emails, payment handles (Cash App / Venmo / Zelle / PayPal),
   or "reach me off-server" pitches. On by default; `/automod disable contact` to
   turn it off. Tune the `_PHONE_RE` / `_EMAIL_RE` / `_PAYMENT_RE` / `_PLATFORM_RE`
   patterns near the top of [`features/moderation.py`](features/moderation.py).
-- **AI terms** — `AI_TERMS` in
+- **AI terms**: `AI_TERMS` in
   [`features/resources.py`](features/resources.py).
-- **XP tuning** — top of [`features/leveling.py`](features/leveling.py).
-- **News watcher** — poll interval and per-server feed caps in `.env`
+- **XP tuning**: top of [`features/leveling.py`](features/leveling.py).
+- **News watcher**: poll interval and per-server feed caps in `.env`
   (`NEWS_POLL_MINUTES`, `NEWS_MAX_CUSTOM_FEEDS`,
   `NEWS_PREMIUM_MAX_CUSTOM_FEEDS`). To add another built-in source, extend
-  `BUILTIN_FEEDS` in [`utils/feeds.py`](utils/feeds.py) — `kind` is `rss` for a
-  normal feed or `sitemap` for a site without one.
-- **Dashboard look & copy** — [`frontend/src`](frontend/src); the brand palette
+  `BUILTIN_FEEDS` in [`utils/feeds.py`](utils/feeds.py), where `kind` is `rss` for
+  a normal feed or `sitemap` for a site without one.
+- **Dashboard look & copy**: [`frontend/src`](frontend/src); the brand palette
   is the `:root` block at the top of `frontend/src/styles.css`. Rebuild with
   `npm run build` after editing.
 
 ### Adding a feature
-Create `features/myfeature.py` with an async `setup(bot)` that adds a cog —
+Create `features/myfeature.py` with an async `setup(bot)` that adds a cog, and
 it's auto-loaded on next start. Use `self.bot.db` for storage and
 `from utils.checks import is_eboard` to gate commands.
 
 ---
 
-## Data, privacy & backups
+## Data & privacy
 
 Data lives in `taigabot.db` (SQLite): verified members' name/email/Discord ID,
 automod settings, XP, warnings, reaction-role bindings, projects, news
 subscriptions, premium grants, dashboard login sessions, and support tickets. The
 DB and `.env` are git-ignored. Since you store real names and emails, only give
-Eboard access to the host and the `#mod-log` / `#taiga-backups` channels.
+Eboard access to the host and the `#mod-log` channel.
 
 Dashboard sessions store a Discord ID, display name and avatar hash against a
 **hashed** token, and expire automatically (`SESSION_TTL_DAYS`, pruned hourly).
@@ -445,26 +445,33 @@ The bot's web server (`web/server.py`) serves a public **Terms of Service** at
 those URLs into the Discord developer portal (**General Information → Terms of
 Service URL / Privacy Policy URL**) once you have a public domain.
 
-A crash, restart, or sleep never loses data (SQLite commits every write). The real
-risk is the host wiping its filesystem (e.g. a Replit rebuild). Backups guard
-against that and run automatically:
+### Durability: read this before deploying
 
-- `/setup` creates a private, **Eboard-only** `#taiga-backups`.
-- Every `BACKUP_INTERVAL_HOURS` (default 12) the bot uploads, **per server**, a
-  **roster CSV** of its current Verified members with their verified real name
-  and email (admins are omitted — they're already visible in Discord). Members
-  who verified in another server are included too — each server's Eboard is
-  entitled to know who its verified members are.
-  `/backup` does it on demand; `python backup_now.py`
-  triggers it from a shell (`GID=<id> python backup_now.py` for one server).
-- **Restore:** the roster lets you re-verify members by hand after a wipe. There
-  is no off-box copy of the full DB — an earlier `.db` attachment was removed
-  because the global `levels` table leaked every server's user IDs and XP into
-  every backup. For a full-fidelity backup, copy `DB_PATH` off the host yourself
-  (e.g. `Database.snapshot()` writes a consistent copy while the bot runs).
+A crash, restart, or sleep never loses data: SQLite commits to disk on every
+write, so the file is intact when the bot wakes up. The real risk is the **host
+wiping its filesystem**, such as a Railway redeploy onto a fresh container or a
+Replit rebuild, which destroys `taigabot.db` outright.
 
-> ⚠️ A roster holds real names and emails — keep `#taiga-backups` Eboard-only.
-> `BACKUP_CHANNEL_ID` optionally overrides the destination by ID.
+**The bot takes no backups of its own.** It used to upload a per-server roster CSV
+to an Eboard-only `#taiga-backups` channel; that was removed, along with the
+`/backup` command and `backup_now.py`. Nothing now copies your data off the host,
+so protecting it is a deployment concern:
+
+- Point `DB_PATH` at **persistent storage** (a Railway volume, a stable Replit
+  path) rather than the container's ephemeral filesystem.
+- Copy that file somewhere safe on whatever schedule you're comfortable losing.
+  Prefer your host's volume-snapshot feature; a plain `cp` of a live database can
+  capture a half-written file, so stop the bot first or use
+  `sqlite3 taigabot.db ".backup out.db"`.
+
+Without one of those, a wipe means every verified member has to verify again from
+scratch.
+
+> ⚠️ If a server still has a `#taiga-backups` channel from the old feature, the
+> roster CSVs in it hold real names and emails, and it is **no longer** kept
+> Eboard-only. `/setup` now gates it like any other channel, which makes it
+> readable by every `Verified` member. `/setup` flags this in its summary. Delete
+> the channel.
 
 ## Project layout
 ```
@@ -473,14 +480,13 @@ TaigaBot/
 ├─ config.py           # reads .env
 ├─ database.py         # async SQLite layer (bot.db)
 ├─ personality.py      # ✏️ editable tsundere lines
-├─ backup_now.py       # one-shot backup trigger for a shell
 ├─ requirements.txt
 ├─ .env.example
 ├─ utils/              # checks.py, emailer.py, guildutils.py, feeds.py
 ├─ web/                # HTTP server, Discord OAuth2 login, JSON API
 │  ├─ server.py        # binds $PORT, serves /health + the built frontend
 │  ├─ auth.py          # OAuth2 login and session cookies
-│  └─ api.py           # /api/* — servers, premium, tickets
+│  └─ api.py           # /api/*: servers, premium, tickets
 ├─ frontend/           # React dashboard (Vite); build output in frontend/dist
 └─ features/           # one file per feature (auto-loaded)
 ```
