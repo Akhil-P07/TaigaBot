@@ -38,7 +38,7 @@ everywhere) and their verification status (see the verification note below).
 | **Verification** (RIT email OTP) | `features/verification.py` | `/verify`, `/confirm`, `/recover`, `/whois` (Eboard) |
 | **Auto-moderation** | `features/moderation.py` | `/automod enable\|disable\|status\|addword\|removeword\|exempt\|unexempt` (filters: words, invites, spam, mentions, caps, phishing, contact), `/kick`, `/ban`, `/timeout`, `/warn`, `/clearwarnings`, `/purge` (Eboard); deleted-message audit log to `#mod-log` |
 | **Welcome / onboarding** | `features/welcome.py` | auto-DM on join, `/verifyhelp` |
-| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
+| **Projects** | `features/projects.py` | `/createproject`, `/editproject`, `/dropproject`, `/unlist`, `/deletetag` (Eboard), `/joinproject`, `/leaveproject`, `/projects`, `/projecttags` |
 | **AI assistant** | `features/ask.py` | `/ask` (Gemini) |
 | **News watcher** (any RSS/Atom feed) | `features/news.py` | `/news add\|rename\|remove\|list\|test` (Eboard) |
 | **AI/ML resources** | `features/resources.py` | `/paper`, `/aiterm` |
@@ -213,6 +213,15 @@ A lightweight project directory with self-service joining.
   can't leave this way** (they'd orphan the project) — an Eboard member uses
   `/dropproject` instead.
 - **`/dropproject`** (Eboard) — select a project to delete its channel and role.
+- **`/unlist`** (Eboard) — retire a project **without losing the channel**: removes
+  its database entry, deletes the project role (and any reaction-role binding to
+  it), re-gates the channel to **Eboard only**, and takes the shared **Project
+  Lead** role off its leads (unless they lead another project). The channel and its
+  message history stay put, parked where Eboard can archive, repurpose, or delete
+  it — use `/dropproject` when you want it gone outright.
+  It re-gates rather than opening the channel up: a project channel's `@everyone`
+  deny is the *same* overwrite `/setup` uses as the verification gate, so clearing
+  it would hand the project's history to unverified members.
 
 **Recommended:** put your projects in one category and **exclude that category**
 from gating (see above) so project channels stay visible only to their role

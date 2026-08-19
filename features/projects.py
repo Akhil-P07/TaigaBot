@@ -14,6 +14,15 @@
 
 /dropproject (Eboard): select from DB-tracked projects to delete channel + role.
 
+/unlist (Eboard): retire a project without losing its channel — drops the DB
+  record, deletes the project role (and any reaction-role binding to it), re-gates
+  the channel to Eboard-only so they can archive/repurpose/delete it at their
+  leisure, and strips the shared Project Lead role from its leads. The channel and
+  its history stay; the project just stops being a project.
+  It re-gates rather than un-gates: the @everyone deny on a project channel is
+  also what /setup uses as the verification gate, so clearing it outright would
+  show the project's history to unverified members.
+
 /deletetag [tag] (Eboard): remove a tag from every project that carries it
   (updates the DB and refreshes each affected project's intro embed in place).
   Leave the tag blank to pick it from a dropdown of existing tags — the same
@@ -882,6 +891,68 @@ class _DropView(discord.ui.View):
         self.stop()
 
 
+# ── /unlist views ─────────────────────────────────────────────────────────────
+
+class _UnlistSelect(discord.ui.Select):
+    def __init__(self, projects: list):
+        options = [
+            discord.SelectOption(
+                label=row["name"][:100],
+                value=str(row["channel_id"]),
+                description=(
+                    _fmt_tags(row["tags"]).replace("`", "")[:100]
+                    if row["tags"]
+                    else "No tags"
+                ),
+            )
+            for row in projects[:25]
+        ]
+        super().__init__(
+            placeholder="Select the project to unlist…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class _UnlistView(discord.ui.View):
+    """Same picker as /dropproject, but the confirm button keeps the channel —
+    only the DB record and the project's role go away, so the wording must not
+    read as a channel deletion."""
+
+    def __init__(self, projects: list):
+        super().__init__(timeout=120)
+        self._map = {str(row["channel_id"]): row for row in projects}
+        self.select = _UnlistSelect(projects)
+        self.add_item(self.select)
+        self.confirmed = False
+        self.chosen = None
+
+    @discord.ui.button(label="📕 Unlist project", style=discord.ButtonStyle.danger, row=1)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.select.values:
+            await interaction.response.send_message(
+                "Pick a project to unlist first.", ephemeral=True
+            )
+            return
+        self.chosen = self._map.get(self.select.values[0])
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="📕 Unlisting project…", view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="❌ Cancelled.", view=self)
+        self.stop()
+
+
 # ── /projects tag filter (scrollable dropdown of existing tags) ──────────────
 
 ALL_TAGS_SENTINEL = "__all__"
@@ -1247,39 +1318,165 @@ class Projects(commands.Cog):
         await self.bot.db.delete_project(row["channel_id"])
         results.append("Removed from project database.")
 
-        # Strip the shared Project Lead role from this project's leads — unless
-        # they still lead another project in this guild.
-        lead_role = gu.project_lead_role(guild)
-        if lead_role:
-            remaining = await self.bot.db.list_projects(guild.id)
-            still_leading = {i for r in remaining for i in _parse_leads(r)}
-            removed = []
-            for uid in _parse_leads(row):
-                if uid in still_leading:
-                    continue
-                member = guild.get_member(uid)
-                if member is None:
-                    try:
-                        member = await guild.fetch_member(uid)
-                    except discord.HTTPException:
-                        continue  # lead left the server
-                if lead_role not in member.roles:
-                    continue
-                try:
-                    await member.remove_roles(
-                        lead_role, reason=f"TaigaBot: project {row['name']} dropped"
-                    )
-                    removed.append(member.mention)
-                except discord.Forbidden:
-                    results.append(
-                        f"⚠️ Couldn't remove `@{lead_role.name}` — check permissions."
-                    )
-                    break
-            if removed:
-                results.append(f"Removed `@{lead_role.name}` from {', '.join(removed)}.")
+        await self._strip_lead_role(guild, row, "dropped", results)
 
         await interaction.followup.send(
             f"🗑️ **{row['name']}** dropped:\n" + "\n".join(f"• {r}" for r in results),
+            ephemeral=True,
+        )
+
+    async def _strip_lead_role(
+        self, guild: discord.Guild, row, verb: str, results: list[str]
+    ) -> None:
+        """Remove the shared Project Lead role from `row`'s leads — unless they
+        still lead another project in this guild. Call this AFTER the project is
+        gone from the DB, so "another project" reflects what's left. Appends a
+        line to `results` for the report."""
+        lead_role = gu.project_lead_role(guild)
+        if not lead_role:
+            return
+        remaining = await self.bot.db.list_projects(guild.id)
+        still_leading = {i for r in remaining for i in _parse_leads(r)}
+        removed = []
+        for uid in _parse_leads(row):
+            if uid in still_leading:
+                continue
+            member = guild.get_member(uid)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(uid)
+                except discord.HTTPException:
+                    continue  # lead left the server
+            if lead_role not in member.roles:
+                continue
+            try:
+                await member.remove_roles(
+                    lead_role, reason=f"TaigaBot: project {row['name']} {verb}"
+                )
+                removed.append(member.mention)
+            except discord.Forbidden:
+                results.append(
+                    f"⚠️ Couldn't remove `@{lead_role.name}` — check permissions."
+                )
+                break
+        if removed:
+            results.append(f"Removed `@{lead_role.name}` from {', '.join(removed)}.")
+
+    # ── /unlist ────────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="unlist",
+        description="(Eboard) Unlist a project: keeps the channel, deletes its role.",
+    )
+    @is_eboard()
+    async def unlist(self, interaction: discord.Interaction):
+        projects = await self.bot.db.list_projects(interaction.guild_id)
+        if not projects:
+            await interaction.response.send_message(
+                "No projects to unlist. Create one with `/createproject` first.",
+                ephemeral=True,
+            )
+            return
+
+        view = _UnlistView(projects)
+        await interaction.response.send_message(
+            "**Unlist a project**\nRemoves it from the project database, deletes its "
+            "role, and re-gates the channel to **Eboard only** so you can archive, "
+            "repurpose, or delete it yourselves. **The channel and its messages are "
+            "kept** — use `/dropproject` if you want those gone too.",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.confirmed or view.chosen is None:
+            return
+
+        row = view.chosen
+        guild = interaction.guild
+        results = []
+
+        # Remove reaction role bindings — the role they point at is about to go.
+        rr_rows = await self.bot.db.list_reaction_roles(guild.id)
+        roles_ch = gu.get_channel(guild, config.ROLES_CHANNEL_NAME)
+        for rr in rr_rows:
+            if rr["role_id"] == row["role_id"]:
+                await self.bot.db.remove_reaction_role(rr["message_id"], rr["emoji"])
+                if roles_ch:
+                    try:
+                        msg = await roles_ch.fetch_message(rr["message_id"])
+                        await msg.clear_reaction(rr["emoji"])
+                    except discord.HTTPException:
+                        pass
+                results.append("Removed reaction role binding from `#roles`.")
+
+        # Delete the project role. Discord drops it from every member and clears
+        # its channel overwrite for us.
+        role = guild.get_role(row["role_id"])
+        role_gone = role is None
+        if role:
+            try:
+                await role.delete(reason=f"TaigaBot: project unlisted by {interaction.user}")
+                results.append(f"Deleted role `@{role.name}`.")
+                role_gone = True
+            except discord.HTTPException:
+                results.append("⚠️ Couldn't delete role — check permissions.")
+        else:
+            results.append("Role already deleted.")
+
+        # Hand the channel to Eboard. Never clear the @everyone deny outright —
+        # on a gated server that same deny IS the verification gate (/setup stamps
+        # it on every channel), so dropping it would show the project's history to
+        # unverified members. Instead: @everyone stays denied, Eboard (and the bot)
+        # can view, and every other allow is stripped. The channel and its history
+        # survive, parked where Eboard can archive, repurpose, or delete it.
+        channel = guild.get_channel(row["channel_id"])
+        reason = "TaigaBot: project unlisted — channel held for Eboard"
+        if isinstance(channel, discord.TextChannel):
+            eboard = gu.eboard_role(guild)
+            try:
+                ow = channel.overwrites_for(guild.default_role)
+                ow.view_channel = False
+                await channel.set_permissions(guild.default_role, overwrite=ow, reason=reason)
+                if eboard:
+                    await channel.set_permissions(eboard, view_channel=True, reason=reason)
+                # Keep the bot itself in: it's just an @everyone member for
+                # permissions, and the deny above would otherwise lock it out.
+                await channel.set_permissions(
+                    guild.me, view_channel=True, send_messages=True,
+                    read_message_history=True, reason=reason,
+                )
+                # Strip the leftover allows that let non-Eboard members in — the
+                # Verified gate allow, and the project role's own overwrite if the
+                # role outlived its deletion above.
+                stale = [gu.verified_role(guild)]
+                if not role_gone:
+                    stale.append(role)
+                for target in stale:
+                    if target is not None and target in channel.overwrites:
+                        await channel.set_permissions(target, overwrite=None, reason=reason)
+                where = f"`@{eboard.name}`" if eboard else "admins"
+                results.append(
+                    f"Kept {channel.mention} and its history — visible to {where} only."
+                )
+            except discord.HTTPException:
+                results.append(
+                    f"⚠️ Kept {channel.mention}, but couldn't re-gate it to Eboard "
+                    "— check my permissions on that channel."
+                )
+        else:
+            results.append("Channel already deleted.")
+
+        # The intro embed stays put: only Eboard can read the channel now, and it's
+        # useful context for whoever decides what to do with it.
+
+        # Remove from DB (also clears any pending join requests).
+        await self.bot.db.delete_project(row["channel_id"])
+        results.append("Removed from project database.")
+
+        await self._strip_lead_role(guild, row, "unlisted", results)
+
+        await interaction.followup.send(
+            f"📕 **{row['name']}** unlisted:\n" + "\n".join(f"• {r}" for r in results),
             ephemeral=True,
         )
 
