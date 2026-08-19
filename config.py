@@ -87,6 +87,16 @@ RESET_ROLES_ON_SETUP: bool = _flag("RESET_ROLES_ON_SETUP", "0")
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH: str = _get("DB_PATH", "taigabot.db")
 
+# ── Encryption at rest ───────────────────────────────────────────────────────
+# Encrypts every verified member's real name, RIT email and Discord username in
+# the database, so a leaked .db file is useless without this key. Generate once:
+#     python -c "import secrets; print(secrets.token_hex(32))"
+# Treat it like the bot token, but with one extra rule: LOSING IT IS PERMANENT.
+# There is no recovery path — the names and emails are simply gone. Deliberately
+# NOT derived from DISCORD_TOKEN: Discord force-rotates tokens it finds in public
+# repos, and that would silently destroy every record.
+ENCRYPTION_KEY: str = _get("ENCRYPTION_KEY")
+
 # ── Gemini AI assistant (/ask) ───────────────────────────────────────────────
 # Free Gemini API key from https://aistudio.google.com/apikey . Leave blank to
 # disable /ask. GEMINI_MODEL can be any free-tier model name.
@@ -142,6 +152,11 @@ def validate() -> list[str]:
     problems = []
     if not DISCORD_TOKEN:
         problems.append("DISCORD_TOKEN is not set.")
+    if not ENCRYPTION_KEY:
+        problems.append(
+            "ENCRYPTION_KEY is not set — required to read or write verified members. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
     if not BREVO_API_KEY:
         problems.append("BREVO_API_KEY not set — email verification will fail.")
     if not EMAIL_FROM:

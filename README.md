@@ -93,7 +93,15 @@ free tier is 300 emails/day.)
 ```powershell
 copy .env.example .env
 ```
-Edit `.env` (token, Brevo). Everything else has sensible defaults. Optional:
+Edit `.env` (token, Brevo). You must also set `ENCRYPTION_KEY` — the bot refuses
+to start without it. Generate one:
+```powershell
+py -c "import secrets; print(secrets.token_hex(32))"
+```
+See [Encryption at rest](#encryption-at-rest) for what it protects and why losing
+it is unrecoverable.
+
+Everything else has sensible defaults. Optional:
 `GEMINI_API_KEY` to enable `/ask` (free key at
 <https://aistudio.google.com/apikey>). `GUILD_ID` gives one server instant command
 updates while developing; leave blank in production.
@@ -436,6 +444,44 @@ subscriptions, premium grants, dashboard login sessions, and support tickets. Th
 DB and `.env` are git-ignored. Since you store real names and emails, only give
 Eboard access to the host and the `#mod-log` channel.
 
+### Encryption at rest
+
+Every verified member's **real name, RIT email and Discord username** is encrypted
+in the database with AES-256-GCM, keyed by `ENCRYPTION_KEY` in your `.env`. A
+copy of `taigabot.db` on its own — a stray backup, a snapshot, a laptop — reveals
+none of it.
+
+What is *not* encrypted, deliberately:
+
+- **Discord IDs.** They are the primary key and join every other table, and
+  Discord hands them out publicly anyway. What's worth hiding is the *link* from
+  an ID to a real person, and that link is exactly what's encrypted.
+- **Discord usernames in `tickets`, `ticket_messages` and `web_sessions`.** Public
+  handles, stored for display.
+
+Warnings are tied to a member's RIT identity so they follow the person across
+Discord accounts. That identity is stored as a keyed HMAC rather than the student
+ID itself, so cross-server warning lookups still work without the database
+holding anyone's student ID in the clear.
+
+> ⚠️ **`ENCRYPTION_KEY` cannot be recovered or reset.** Unlike the bot token,
+> there is no "regenerate" button — if you lose the key, every stored name and
+> email is gone permanently. Back it up somewhere outside the host. Changing it
+> does not re-encrypt anything: the bot detects the mismatch and refuses to start
+> rather than corrupt half the table.
+
+**Upgrading an existing deployment.** Add `ENCRYPTION_KEY` before deploying the
+new build. The first start migrates the database in place — atomically, so a crash
+mid-way simply leaves the old database and retries next boot — and writes a
+plaintext copy to `<DB_PATH>.pre-encrypt.bak`. **That file is a complete
+unencrypted roster:** once you've confirmed the bot works, move it offline and
+delete it.
+
+If two Discord accounts share one RIT student ID (e.g. `abc1234@rit.edu` and
+`abc1234@g.rit.edu`), the migration stops and names them rather than guessing
+which to keep. Delete the stale row — keep the one with the higher `verified_at` —
+and restart.
+
 Dashboard sessions store a Discord ID, display name and avatar hash against a
 **hashed** token, and expire automatically (`SESSION_TTL_DAYS`, pruned hourly).
 Support tickets store whatever the reporter typed, readable by `BOT_OWNER_IDS`.
@@ -479,6 +525,7 @@ TaigaBot/
 ├─ bot.py              # entry point; auto-loads features/
 ├─ config.py           # reads .env
 ├─ database.py         # async SQLite layer (bot.db)
+├─ crypto.py           # AES-256-GCM field encryption + blind index for PII
 ├─ personality.py      # ✏️ editable tsundere lines
 ├─ requirements.txt
 ├─ .env.example

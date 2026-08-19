@@ -5,6 +5,9 @@
 *.db
 *.db-journal
 *.sqlite3
+# Pre-encryption backup written by the PII migration. This is the LAST plaintext
+# copy of every member's real name and email — *.db above does not match it.
+*.pre-encrypt.bak
 
 # Phishing trainer cache (re-downloaded on demand; the trained model
 # dataset/phishing_model.json IS committed and must NOT be ignored)

@@ -13,12 +13,16 @@ These prove, without Discord / email / a live bot:
       and recovery paths.
   C3  a failed DB write rolls back and leaves the shared connection usable for
       every other feature (the cascade fix).
+  C4  PII is encrypted at rest: names/emails never hit the disk in cleartext,
+      lookups still work through the blind index, and the one-time migration of
+      a legacy plaintext database is atomic, idempotent and key-checked.
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import pathlib
+import sqlite3
 import sys
 import tempfile
 import time
@@ -26,10 +30,21 @@ import time
 # Make the repo root importable.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+# MUST precede `import config`: config reads the environment at import time, and
+# load_dotenv() does not override variables that are already set. Setting it here
+# both gives the tests a deterministic key and stops a developer's real .env key
+# from being used to write temp databases.
+os.environ.setdefault("ENCRYPTION_KEY", "11" * 32)
+
 import discord  # noqa: E402
 
 import config  # noqa: E402
-from database import Database  # noqa: E402
+import crypto  # noqa: E402
+from database import (  # noqa: E402
+    Database,
+    DuplicateStudentIdError,
+    EncryptionKeyMismatch,
+)
 from utils import guildutils as gu  # noqa: E402
 import features.verification as v  # noqa: E402
 
@@ -267,14 +282,17 @@ async def test_db_rollback_hygiene():
         await db.add_verified_user(1, "u1", "One", "a@rit.edu", 100)
 
         # Force the exact original failure: a NULL into the NOT NULL guild_id.
+        # student_id_hash is supplied (it is also NOT NULL now) so that guild_id
+        # stays the reason this raises.
         raised = False
         try:
             async with db._tx():
                 await db.conn.execute(
                     "INSERT INTO verified_users "
-                    "(discord_id, discord_username, real_name, email, guild_id, verified_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (2, "u2", "Two", "b@rit.edu", None, 123),
+                    "(discord_id, discord_username, real_name, email, "
+                    "student_id_hash, guild_id, verified_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (2, "u2", "Two", "b@rit.edu", "deadbeef", None, 123),
                 )
         except Exception:
             raised = True
@@ -294,6 +312,363 @@ async def test_db_rollback_hygiene():
     print("  C3 hygiene: failed write rolled back; connection still serves all features  ✅")
 
 
+# ── C4: encryption at rest ───────────────────────────────────────────────────
+LEGACY_SCHEMA = """
+CREATE TABLE verified_users (
+    discord_id       INTEGER PRIMARY KEY,
+    discord_username TEXT    NOT NULL,
+    real_name        TEXT    NOT NULL,
+    email            TEXT    NOT NULL UNIQUE,
+    guild_id         INTEGER NOT NULL,
+    verified_at      INTEGER NOT NULL,
+    last_recovery_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE warnings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id     INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    moderator_id INTEGER NOT NULL,
+    reason       TEXT    NOT NULL,
+    created_at   INTEGER NOT NULL,
+    identity_key TEXT    NOT NULL DEFAULT ''
+);
+"""
+
+
+def _make_legacy_db(rows, warnings=()) -> str:
+    """A pre-encryption database, written with raw sqlite3 as an old build would."""
+    path = _tmp_db_path()
+    c = sqlite3.connect(path)
+    c.executescript(LEGACY_SCHEMA)
+    c.executemany(
+        "INSERT INTO verified_users (discord_id, discord_username, real_name, "
+        "email, guild_id, verified_at, last_recovery_at) VALUES (?,?,?,?,?,?,?)",
+        rows,
+    )
+    c.executemany(
+        "INSERT INTO warnings (guild_id, user_id, moderator_id, reason, "
+        "created_at, identity_key) VALUES (?,?,?,?,?,?)",
+        warnings,
+    )
+    c.commit()
+    c.close()
+    return path
+
+
+def _raw(path: str, sql: str):
+    c = sqlite3.connect(path)
+    try:
+        return c.execute(sql).fetchall()
+    finally:
+        c.close()
+
+
+async def test_crypto_envelope():
+    a = crypto.aad("verified_users", "real_name", 1)
+    b = crypto.aad("verified_users", "real_name", 2)
+
+    assert crypto.decrypt(crypto.encrypt("Aisha Okafor", a), a) == "Aisha Okafor"
+    assert crypto.encrypt("x", a) != crypto.encrypt("x", a), "must be randomized"
+    assert crypto.decrypt(crypto.encrypt("", a), a) == "", "empty string round-trip"
+
+    # Ciphertext is bound to its row: it must not decrypt under another id.
+    assert crypto.try_decrypt(crypto.encrypt("Aisha", a), b) is None
+
+    # Tampering is detected rather than silently returning garbage.
+    e = crypto.encrypt("Aisha", a)
+    flipped = e[:20] + ("A" if e[20] != "A" else "B") + e[21:]
+    assert crypto.try_decrypt(flipped, a) is None
+
+    # A member legitimately named "v1:..." is not mistaken for ciphertext.
+    assert crypto.try_decrypt("v1:Tiger", a) is None
+    assert crypto.decrypt(crypto.encrypt("v1:Tiger", a), a) == "v1:Tiger"
+    assert crypto.encrypt_if_plaintext("v1:Tiger", a) != "v1:Tiger"
+    # ...and encrypting twice is a no-op, which is what makes the migration safe
+    # to re-run.
+    assert crypto.encrypt_if_plaintext(e, a) == e
+
+    # The blind index is deterministic, but '' is never hashed — see below.
+    assert crypto.blind_index("") == ""
+    assert crypto.blind_index("aap1234") == crypto.blind_index("aap1234")
+    assert len(crypto.blind_index("aap1234")) == 64
+    assert crypto.blind_index("aap1234") != crypto.blind_index("aap1235")
+    print("  C4 crypto: AEAD round-trip, row binding, tamper + 'v1:' handling  ✅")
+
+
+async def test_pii_encrypted_at_rest():
+    path = _tmp_db_path()
+    db = Database(path)
+    await db.connect()
+    try:
+        await db.add_verified_user(1, "riley_b", "Riley Barnes", "rab1045@rit.edu", 9)
+
+        raw = _raw(path, "SELECT discord_username, real_name, email, student_id_hash "
+                         "FROM verified_users")[0]
+        for value in raw[:3]:
+            assert value.startswith("v1:"), f"stored in cleartext: {value!r}"
+        for secret in ("Riley Barnes", "rab1045@rit.edu", "riley_b", "rab1045"):
+            assert secret not in str(raw), f"{secret!r} readable in the raw row"
+        assert raw[3] == crypto.blind_index("rab1045")
+
+        # ...but callers still see plaintext, unchanged.
+        u = await db.get_verified_user(1)
+        assert u["real_name"] == "Riley Barnes"
+        assert u["email"] == "rab1045@rit.edu"
+        assert u["discord_username"] == "riley_b"
+    finally:
+        await db.close()
+    print("  C4 at rest: PII is ciphertext on disk, plaintext to callers  ✅")
+
+
+async def test_blind_index_lookups():
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        await db.add_verified_user(1, "u", "A Person", "aap1234@rit.edu", 9)
+        assert await db.student_id_is_registered("aap1234")
+        assert await db.student_id_is_registered("AAP1234"), "must be case-insensitive"
+        assert not await db.student_id_is_registered("zzz9999")
+        assert await db.verified_discord_id_for("aap1234") == 1
+        assert await db.verified_discord_id_for("nobody") is None
+        assert await db.last_recovery_at_for("aap1234") == 0
+        # student_id_for returns the blind index, which is what identity_key holds.
+        assert await db.student_id_for(1) == crypto.blind_index("aap1234")
+        assert await db.student_id_for(12345) == ""
+
+        # The same person on the other RIT domain is the same student id, and the
+        # UNIQUE constraint now enforces what every read already assumed.
+        await db.add_verified_user(2, "u2", "A Person", "aap1234@g.rit.edu", 9)
+        assert _raw(db.path, "SELECT COUNT(*) FROM verified_users")[0][0] == 1
+        assert await db.verified_discord_id_for("aap1234") == 2
+    finally:
+        await db.close()
+    print("  C4 lookups: student-id queries resolve through the blind index  ✅")
+
+
+async def test_transfer_reencrypts():
+    """Regression: ciphertext is bound to discord_id, so /recover must re-encrypt.
+
+    A plain UPDATE of discord_id would leave the values authenticated against the
+    old account and permanently undecryptable — breaking /whois for exactly the
+    people who just recovered their account."""
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        await db.add_verified_user(111, "old_handle", "Sam Rivera", "sxr9001@rit.edu", 9)
+        assert await db.transfer_verification("sxr9001", 222, "new_handle", 9)
+
+        moved = await db.get_verified_user(222)      # must not raise
+        assert moved["real_name"] == "Sam Rivera"
+        assert moved["email"] == "sxr9001@rit.edu"
+        assert moved["discord_username"] == "new_handle"
+        assert moved["last_recovery_at"] > 0
+        assert await db.get_verified_user(111) is None
+        assert await db.verified_discord_id_for("sxr9001") == 222
+        assert not await db.transfer_verification("nobody", 333, "x", 9)
+    finally:
+        await db.close()
+    print("  C4 recovery: transfer re-encrypts under the new account id  ✅")
+
+
+async def test_blank_identity_stays_blank():
+    """'' means "unverified, match by account". If it were hashed, every
+    unverified member everywhere would merge into one shared identity."""
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        await db.add_warning(1, 500, 9, "spam")       # unverified member
+        await db.add_warning(2, 501, 9, "spam")       # a different unverified member
+        assert _raw(db.path, "SELECT identity_key FROM warnings")[0][0] == ""
+        # Each is counted on their own account, not merged together.
+        assert (await db.global_warnings(500))[1] == 1
+        assert (await db.global_warnings(501))[1] == 1
+
+        # A verified member's warning is stamped with their blind index.
+        await db.add_verified_user(600, "u", "V Person", "vvv1234@rit.edu", 1)
+        await db.add_warning(1, 600, 9, "rude")
+        await db.add_warning(2, 600, 9, "rude again")
+        keys = [r[0] for r in _raw(db.path, "SELECT identity_key FROM warnings")]
+        assert crypto.blind_index("vvv1234") in keys
+        assert "vvv1234" not in keys, "student id stored in cleartext"
+        assert (await db.global_warnings(600)) == (2, 2)
+        assert (await db.cross_server_warnings(600, 1)) == (1, 1)
+    finally:
+        await db.close()
+    print("  C4 identity: blank keys stay blank; verified keys are hashed  ✅")
+
+
+async def test_legacy_migration():
+    path = _make_legacy_db(
+        rows=[
+            (1, "riley_b", "Riley Barnes", "rab1045@rit.edu", 9, 1000, 0),
+            (2, "sam_r", "Sam Rivera", "sxr9001@g.rit.edu", 9, 1001, 55),
+        ],
+        warnings=[
+            (9, 1, 3, "spam", 1200, "rab1045"),   # cleartext student id
+            (9, 5, 3, "spam", 1201, ""),          # legacy blank
+        ],
+    )
+    db = Database(path)
+    await db.connect()
+    try:
+        u = await db.get_verified_user(1)
+        assert u["real_name"] == "Riley Barnes" and u["email"] == "rab1045@rit.edu"
+        assert (await db.get_verified_user(2))["last_recovery_at"] == 55
+
+        # Nothing readable survives in the file itself.
+        blob = open(path, "rb").read()
+        for secret in (b"Riley Barnes", b"rab1045@rit.edu", b"Sam Rivera", b"rab1045"):
+            assert secret not in blob, f"{secret!r} still in the raw database file"
+
+        keys = [r[0] for r in _raw(path, "SELECT identity_key FROM warnings ORDER BY id")]
+        assert keys == [crypto.blind_index("rab1045"), ""], keys
+
+        # The email UNIQUE constraint is gone, replaced by one on student_id_hash.
+        idx = _raw(path, "PRAGMA index_list(verified_users)")
+        assert not any(r[3] == "u" for r in idx), "UNIQUE(email) autoindex survived"
+        assert any(r[1] == "idx_verified_users_student_id_hash" and r[2] for r in idx)
+
+        # And the lookups work on migrated data.
+        assert await db.verified_discord_id_for("sxr9001") == 2
+        assert await db.student_id_for(1) == crypto.blind_index("rab1045")
+
+        bak = path + ".pre-encrypt.bak"
+        assert os.path.exists(bak), "no pre-encryption backup was written"
+        assert _raw(bak, "SELECT real_name FROM verified_users")[0][0] == "Riley Barnes"
+    finally:
+        await db.close()
+    print("  C4 migration: legacy plaintext DB encrypted, indexes swapped, .bak kept  ✅")
+
+
+async def test_migration_idempotent():
+    path = _make_legacy_db([(1, "u", "Ada Lovelace", "aal1000@rit.edu", 9, 1000, 0)])
+    db = Database(path)
+    await db.connect()
+    await db.close()
+    bak = path + ".pre-encrypt.bak"
+    stamp = (os.path.getmtime(bak), os.path.getsize(bak))
+    row = _raw(path, "SELECT * FROM verified_users")[0]
+
+    db = Database(path)
+    await db.connect()
+    try:
+        assert (await db.get_verified_user(1))["real_name"] == "Ada Lovelace"
+        assert _raw(path, "SELECT * FROM verified_users")[0] == row, "row was rewritten"
+        assert (os.path.getmtime(bak), os.path.getsize(bak)) == stamp, ".bak overwritten"
+    finally:
+        await db.close()
+    print("  C4 migration: re-running is a no-op (no double-encryption)  ✅")
+
+
+async def test_migration_atomic_on_crash():
+    """The whole migration is one transaction, so a crash leaves the ORIGINAL
+    database behind — never a half-encrypted one."""
+    path = _make_legacy_db([
+        (i, f"u{i}", f"Person {i}", f"aaa{1000 + i}@rit.edu", 9, 1000, 0)
+        for i in range(1, 6)
+    ])
+    before = _raw(path, "SELECT * FROM verified_users ORDER BY discord_id")
+
+    real = crypto.encrypt_if_plaintext
+    calls = {"n": 0}
+
+    def boom(value, associated):
+        calls["n"] += 1
+        if calls["n"] == 7:                      # part-way through row 3
+            raise RuntimeError("simulated crash mid-migration")
+        return real(value, associated)
+
+    crypto.encrypt_if_plaintext = boom
+    try:
+        raised = False
+        try:
+            await Database(path).connect()
+        except RuntimeError:
+            raised = True
+        assert raised, "the simulated crash should have propagated"
+
+        cols = {r[1] for r in _raw(path, "PRAGMA table_info(verified_users)")}
+        assert "student_id_hash" not in cols, "schema change survived a crash"
+        assert _raw(path, "SELECT * FROM verified_users ORDER BY discord_id") == before
+        assert _raw(path, "SELECT COUNT(*) FROM crypto_meta "
+                          "WHERE key='key_fingerprint'")[0][0] == 0
+    finally:
+        crypto.encrypt_if_plaintext = real
+
+    # ...and the retry afterwards succeeds.
+    db = Database(path)
+    await db.connect()
+    try:
+        assert (await db.get_verified_user(3))["real_name"] == "Person 3"
+    finally:
+        await db.close()
+    print("  C4 migration: crash rolls back completely; retry then succeeds  ✅")
+
+
+async def test_wrong_key_refuses():
+    path = _make_legacy_db([(1, "u", "Grace Hopper", "gbh1906@rit.edu", 9, 1000, 0)])
+    db = Database(path)
+    await db.connect()
+    await db.close()
+    before = _raw(path, "SELECT * FROM verified_users")
+
+    crypto.load("99" * 32)                        # a different deployment's key
+    try:
+        raised = False
+        try:
+            await Database(path).connect()
+        except EncryptionKeyMismatch:
+            raised = True
+        assert raised, "a mismatched ENCRYPTION_KEY must refuse to start"
+        assert _raw(path, "SELECT * FROM verified_users") == before, "disk was modified"
+    finally:
+        crypto.load(os.environ["ENCRYPTION_KEY"])  # restore for later tests
+
+    db = Database(path)
+    await db.connect()
+    try:
+        assert (await db.get_verified_user(1))["real_name"] == "Grace Hopper"
+    finally:
+        await db.close()
+    print("  C4 key: a mismatched key is refused, and the right one still works  ✅")
+
+
+async def test_duplicate_student_id_aborts():
+    """Two accounts on one student id can't both satisfy UNIQUE(student_id_hash),
+    and picking a survivor is a human decision — so abort, touching nothing."""
+    path = _make_legacy_db([
+        (1, "u1", "One Person", "dup1234@rit.edu", 9, 1000, 0),
+        (2, "u2", "Two Person", "dup1234@g.rit.edu", 9, 1001, 0),
+    ])
+    before = _raw(path, "SELECT * FROM verified_users ORDER BY discord_id")
+
+    raised = None
+    try:
+        await Database(path).connect()
+    except DuplicateStudentIdError as e:
+        raised = str(e)
+    assert raised, "duplicate student ids must abort the migration"
+    assert "dup1234" in raised and "1" in raised and "2" in raised
+
+    assert _raw(path, "SELECT * FROM verified_users ORDER BY discord_id") == before
+    assert not os.path.exists(path + ".pre-encrypt.bak"), "wrote a .bak before aborting"
+    cols = {r[1] for r in _raw(path, "PRAGMA table_info(verified_users)")}
+    assert "student_id_hash" not in cols
+
+    # Resolve it the way the error message says, and the migration then runs.
+    c = sqlite3.connect(path)
+    c.execute("DELETE FROM verified_users WHERE discord_id = 1")
+    c.commit()
+    c.close()
+    db = Database(path)
+    await db.connect()
+    try:
+        assert (await db.get_verified_user(2))["email"] == "dup1234@g.rit.edu"
+    finally:
+        await db.close()
+    print("  C4 migration: duplicate student ids abort cleanly, then migrate  ✅")
+
+
 async def main():
     print("Running verification + resilience tests...\n")
     await test_email_pool_isolation()
@@ -301,6 +676,16 @@ async def main():
     await test_no_shared_server()
     await test_recovery_fanout()
     await test_db_rollback_hygiene()
+    await test_crypto_envelope()
+    await test_pii_encrypted_at_rest()
+    await test_blind_index_lookups()
+    await test_transfer_reencrypts()
+    await test_blank_identity_stays_blank()
+    await test_legacy_migration()
+    await test_migration_idempotent()
+    await test_migration_atomic_on_crash()
+    await test_wrong_key_refuses()
+    await test_duplicate_student_id_aborts()
     print("\nALL TESTS PASSED ✅")
 
 
