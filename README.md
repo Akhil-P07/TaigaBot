@@ -498,26 +498,58 @@ write, so the file is intact when the bot wakes up. The real risk is the **host
 wiping its filesystem**, such as a Railway redeploy onto a fresh container or a
 Replit rebuild, which destroys `taigabot.db` outright.
 
-**The bot takes no backups of its own.** It used to upload a per-server roster CSV
-to an Eboard-only `#taiga-backups` channel; that was removed, along with the
-`/backup` command and `backup_now.py`. Nothing now copies your data off the host,
-so protecting it is a deployment concern:
+**Encrypted roster backups.** Every `BACKUP_INTERVAL_HOURS` (default and minimum
+12), the bot uploads each server's verified-member rows to that server's
+Eboard-only `#taiga-backups` channel, which `/setup` creates. Eboard can also run
+`/backup` on demand.
+
+The attachment is **ciphertext** — the same AES-256-GCM envelopes stored in the
+database — so it is unreadable to anyone in the channel, including the Eboard.
+Its job is durability, not disclosure. Only `verified_users` is included, scoped
+to that server: `levels`, `warnings`, `tickets` and the owner tables are global,
+so shipping a raw `.db` snapshot would hand every server a copy of every other
+server's data. (That mistake was made once; don't reintroduce a raw DB export
+without auditing every table it copies.)
+
+> ⚠️ **A backup is only as good as `ENCRYPTION_KEY`.** These files protect you
+> from a wiped disk, not from a lost key. Keep the key somewhere outside the host.
+
+Set `BACKUP_INTERVAL_HOURS=-1` to switch backups off across every server — the
+feature is not loaded at all, so `/backup` disappears too. Existing
+`#taiga-backups` channels stay Eboard-only either way.
+
+This does not replace ordinary host durability:
 
 - Point `DB_PATH` at **persistent storage** (a Railway volume, a stable Replit
   path) rather than the container's ephemeral filesystem.
-- Copy that file somewhere safe on whatever schedule you're comfortable losing.
-  Prefer your host's volume-snapshot feature; a plain `cp` of a live database can
-  capture a half-written file, so stop the bot first or use
-  `sqlite3 taigabot.db ".backup out.db"`.
+- For a full copy including levels and warnings, snapshot the volume, or use
+  `sqlite3 taigabot.db ".backup out.db"` — a plain `cp` of a live database can
+  capture a half-written file.
 
-Without one of those, a wipe means every verified member has to verify again from
-scratch.
+**Restoring after a wipe.** The roster comes back from Discord:
 
-> ⚠️ If a server still has a `#taiga-backups` channel from the old feature, the
-> roster CSVs in it hold real names and emails, and it is **no longer** kept
-> Eboard-only. `/setup` now gates it like any other channel, which makes it
-> readable by every `Verified` member. `/setup` flags this in its summary. Delete
-> the channel.
+1. Set the **same** `ENCRYPTION_KEY` the backups were written with. A different
+   key is refused rather than imported.
+2. Download the newest `roster-*.csv` from each server's `#taiga-backups`.
+3. Run `python restore_roster.py roster-*.csv` (add `--dry-run` first to
+   key-check every file without writing). Rows already present are left alone, so
+   it is safe to re-run.
+4. Start the bot and `/whois` someone to confirm decryption works.
+
+Members whose rows are missing simply verify again. Levels and warnings are not
+covered by these backups — only host-level snapshots restore those.
+
+### Roster export (dashboard)
+
+An Eboard member can download their server's roster as a **decrypted** CSV from
+the server's dashboard page: display name, username, Discord ID, and the real
+name and RIT email of every member holding the `Verified` role. Members who
+verified in a different server are included — any server's Eboard may see who its
+own members are.
+
+Unlike the Discord backup, this file is plaintext PII, so it is limited to one
+export per server per `ROSTER_EXPORT_COOLDOWN_HOURS` (default and minimum 12) and
+every export is recorded in the `roster_exports` table with who ran it and when.
 
 ## Project layout
 ```

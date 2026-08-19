@@ -13,6 +13,7 @@ levels          : per-user XP / level (GLOBAL — shared across all guilds)
 warnings        : moderation warnings issued by Eboard
 reaction_roles  : emoji -> role bindings on specific messages
 crypto_meta     : which ENCRYPTION_KEY this database belongs to
+roster_exports  : per-guild cooldown + audit trail for decrypted roster downloads
 
 Encryption at rest
 ------------------
@@ -64,6 +65,22 @@ def _student_id_from_email(email: str) -> str:
     return e[:i] if i > 0 else ""
 
 
+# Column order for the encrypted roster backup. Shared by Database's export/import
+# pair, features/backup.py and restore_roster.py so the CSV header, the SELECT and
+# the INSERT can never drift apart. Appending here changes the on-disk backup
+# format — bump the `taigabot-roster` version in features/backup.py if you do.
+ENCRYPTED_EXPORT_COLUMNS = (
+    "discord_id",
+    "discord_username",
+    "real_name",
+    "email",
+    "student_id_hash",
+    "guild_id",
+    "verified_at",
+    "last_recovery_at",
+)
+
+
 SCHEMA = """
 -- discord_username / real_name / email hold AES-GCM envelopes, not cleartext.
 -- `email` is deliberately NOT UNIQUE any more: randomized ciphertext differs on
@@ -91,6 +108,18 @@ CREATE TABLE IF NOT EXISTS verified_users (
 CREATE TABLE IF NOT EXISTS crypto_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- Dashboard roster exports. That download is DECRYPTED, so unlike the encrypted
+-- #taiga-backups upload it is rate-limited and recorded. Per-guild, and in SQLite
+-- rather than a process dict for two reasons: the cooldown must survive a restart
+-- (a redeploy would otherwise reset everyone's limit), and `exported_by` is the
+-- only record of who pulled a server's real names and emails.
+CREATE TABLE IF NOT EXISTS roster_exports (
+    guild_id       INTEGER PRIMARY KEY,
+    last_export_at INTEGER NOT NULL,
+    exported_by    INTEGER NOT NULL DEFAULT 0,
+    row_count      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -856,6 +885,98 @@ class Database:
                 ),
             )
         return cur.rowcount > 0
+
+    # ── encrypted roster export / restore ─────────────────────────────────
+    # The one place callers legitimately handle ciphertext. features/backup.py
+    # uploads these rows to an Eboard-only Discord channel so the roster survives
+    # a wiped host, and restore_roster.py puts them back. Both sides move the
+    # bytes VERBATIM and keep each row's original discord_id, because crypto.aad
+    # binds every ciphertext to it — re-keying a row on the way through would
+    # produce a table that nothing can decrypt.
+
+    async def export_encrypted_rows(self, guild_id: int) -> list[dict]:
+        """One guild's verified_users rows, still encrypted.
+
+        Deliberately NOT decrypted: this is the only accessor that hands out
+        ciphertext, and it exists so a backup can be stored somewhere less
+        trusted than the database itself.
+
+        Scoped by guild_id (where the member ran /verify), not by current
+        membership, so the union of every guild's export reconstructs the whole
+        table exactly once. See features/backup.py for the rows that scoping
+        cannot reach.
+        """
+        cur = await self.conn.execute(
+            f"SELECT {', '.join(ENCRYPTED_EXPORT_COLUMNS)} FROM verified_users "
+            "WHERE guild_id = ? ORDER BY discord_id",
+            (guild_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def import_encrypted_rows(
+        self, rows: list[dict], fingerprint: str
+    ) -> tuple[int, int]:
+        """Restore exported rows verbatim. Returns (inserted, skipped).
+
+        Refuses the whole batch if `fingerprint` isn't this key's — rows written
+        under a different ENCRYPTION_KEY would insert cleanly and then fail to
+        decrypt forever, which is worse than not restoring at all.
+
+        INSERT OR IGNORE, so restoring over a live database can only ever add
+        people back. A row already present (same discord_id, or same
+        student_id_hash under UNIQUE) is left exactly as it is: the live copy is
+        by definition newer than the backup.
+        """
+        expected = crypto.load().fingerprint
+        if fingerprint != expected:
+            raise EncryptionKeyMismatch(
+                "This backup was written with a different ENCRYPTION_KEY.\n"
+                f"  backup was written with fingerprint : {fingerprint}\n"
+                f"  current ENCRYPTION_KEY fingerprint  : {expected}\n"
+                "Restore with the key the backup was made under. Importing it "
+                "under this key would store rows that can never be decrypted."
+            )
+
+        inserted = 0
+        async with self._tx():
+            for r in rows:
+                cur = await self.conn.execute(
+                    "INSERT OR IGNORE INTO verified_users "
+                    f"({', '.join(ENCRYPTED_EXPORT_COLUMNS)}) "
+                    f"VALUES ({', '.join('?' * len(ENCRYPTED_EXPORT_COLUMNS))})",
+                    tuple(r[c] for c in ENCRYPTED_EXPORT_COLUMNS),
+                )
+                inserted += cur.rowcount or 0
+        return inserted, len(rows) - inserted
+
+    # ── dashboard roster export cooldown ──────────────────────────────────
+
+    async def last_roster_export(self, guild_id: int) -> int:
+        """When this guild last exported a decrypted roster (0 if never)."""
+        cur = await self.conn.execute(
+            "SELECT last_export_at FROM roster_exports WHERE guild_id = ?", (guild_id,)
+        )
+        row = await cur.fetchone()
+        return (row["last_export_at"] or 0) if row else 0
+
+    async def record_roster_export(
+        self, guild_id: int, user_id: int, row_count: int
+    ) -> None:
+        """Stamp an export: starts the cooldown and records who pulled the PII."""
+        async with self._tx():
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO roster_exports "
+                "(guild_id, last_export_at, exported_by, row_count) VALUES (?, ?, ?, ?)",
+                (guild_id, int(time.time()), user_id, row_count),
+            )
+
+    async def count_all_verified(self) -> int:
+        """Every verified row, across all guilds. Lets features/backup.py notice
+        rows that no guild's backup covers (their guild_id points somewhere the
+        bot no longer is)."""
+        cur = await self.conn.execute("SELECT COUNT(*) AS c FROM verified_users")
+        row = await cur.fetchone()
+        return row["c"] if row else 0
 
     async def count_verified(self, guild_id: int) -> int:
         cur = await self.conn.execute(

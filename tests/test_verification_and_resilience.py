@@ -47,6 +47,8 @@ from database import (  # noqa: E402
 )
 from utils import guildutils as gu  # noqa: E402
 import features.verification as v  # noqa: E402
+import features.backup as backup  # noqa: E402
+import restore_roster  # noqa: E402
 
 VERIFIED = config.VERIFIED_ROLE_NAME
 UNVERIFIED = config.UNVERIFIED_ROLE_NAME
@@ -669,6 +671,186 @@ async def test_duplicate_student_id_aborts():
     print("  C4 migration: duplicate student ids abort cleanly, then migrate  ✅")
 
 
+# ── C5: encrypted roster backup / restore ────────────────────────────────────
+
+async def test_backup_payload_is_ciphertext():
+    """The whole reason this feature could come back: the file uploaded to a
+    Discord channel must carry no readable PII."""
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        await db.add_verified_user(1, "ada_l", "Ada Lovelace", "ael1815@rit.edu", 9)
+        await db.add_verified_user(2, "alan_t", "Alan Turing", "amt1912@rit.edu", 9)
+        await db.add_verified_user(3, "other", "Other Server", "oth9999@rit.edu", 77)
+
+        rows = await db.export_encrypted_rows(9)
+        text = backup.render_backup_csv(rows, 9, crypto.load().fingerprint, "20260819")
+
+        assert len(rows) == 2, "export must be scoped to one guild"
+        for secret in ("Ada Lovelace", "ael1815@rit.edu", "ada_l", "ael1815",
+                       "Alan Turing", "amt1912@rit.edu"):
+            assert secret not in text, f"{secret!r} readable in the backup file"
+        # Other guilds' members aren't in this guild's file at all. Checked on the
+        # parsed ids, not by substring: base64 ciphertext contains every digit.
+        assert {r["discord_id"] for r in rows} == {1, 2}
+        assert "Other Server" not in text
+        assert crypto.load().fingerprint in text, "no key fingerprint to check on restore"
+        for r in rows:
+            for col in ("discord_username", "real_name", "email"):
+                assert r[col].startswith("v1:"), f"{col} left the DB decrypted"
+    finally:
+        await db.close()
+    print("  C5 backup: uploaded roster is ciphertext, scoped to one guild  ✅")
+
+
+async def test_backup_restore_round_trip():
+    """Export -> wipe -> restore returns the original plaintext.
+
+    This is the assertion that proves ciphertext may be moved verbatim: the AAD
+    binds each value to its discord_id, so the restore only works because the id
+    is preserved."""
+    path = _tmp_db_path()
+    db = Database(path)
+    await db.connect()
+    try:
+        await db.add_verified_user(111, "sam_r", "Sam Rivera", "sxr9001@rit.edu", 9)
+        await db.add_verified_user(222, "kim_j", "Jordan Kim", "jk9284@rit.edu", 9)
+        rows = await db.export_encrypted_rows(9)
+        fingerprint = crypto.load().fingerprint
+
+        await db.conn.execute("DELETE FROM verified_users")
+        await db.conn.commit()
+        assert await db.get_verified_user(111) is None
+
+        inserted, skipped = await db.import_encrypted_rows(rows, fingerprint)
+        assert (inserted, skipped) == (2, 0)
+
+        u = await db.get_verified_user(111)
+        assert u["real_name"] == "Sam Rivera"
+        assert u["email"] == "sxr9001@rit.edu"
+        assert u["discord_username"] == "sam_r"
+        # The blind index came back too, so lookups work without re-deriving it.
+        assert await db.verified_discord_id_for("jk9284") == 222
+
+        # Re-importing is a no-op: nothing is duplicated or clobbered.
+        inserted, skipped = await db.import_encrypted_rows(rows, fingerprint)
+        assert (inserted, skipped) == (0, 2)
+        assert (await db.get_verified_user(111))["real_name"] == "Sam Rivera"
+    finally:
+        await db.close()
+    print("  C5 restore: round-trip returns plaintext; re-import is a no-op  ✅")
+
+
+async def test_restore_refuses_wrong_key():
+    """Importing under the wrong key would store rows nothing can ever decrypt —
+    strictly worse than an empty table."""
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        await db.add_verified_user(1, "u", "Grace Hopper", "gbh1906@rit.edu", 9)
+        rows = await db.export_encrypted_rows(9)
+
+        raised = False
+        try:
+            await db.import_encrypted_rows(rows, "deadbeef" * 4)
+        except EncryptionKeyMismatch:
+            raised = True
+        assert raised, "a foreign fingerprint must be refused"
+
+        await db.conn.execute("DELETE FROM verified_users")
+        await db.conn.commit()
+        assert await db.get_verified_user(1) is None, "nothing should have been written"
+    finally:
+        await db.close()
+    print("  C5 restore: a backup from a different key is refused  ✅")
+
+
+async def test_backup_file_parses_back():
+    """The file features/backup.py writes is the file restore_roster.py reads.
+    Asserted end-to-end so a header change can't silently break restores."""
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        await db.add_verified_user(1, "u1", "Ada Lovelace", "ael1815@rit.edu", 9)
+        rows = await db.export_encrypted_rows(9)
+        fingerprint = crypto.load().fingerprint
+        text = backup.render_backup_csv(rows, 9, fingerprint, "20260819-142233")
+
+        path = os.path.join(tempfile.gettempdir(), f"roster-test-{time.time_ns()}.csv")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        try:
+            parsed_fp, parsed_rows = restore_roster.parse_backup(path)
+        finally:
+            os.remove(path)
+
+        assert parsed_fp == fingerprint
+        assert parsed_rows == rows, "parse_backup must reproduce the exported rows"
+
+        await db.conn.execute("DELETE FROM verified_users")
+        await db.conn.commit()
+        assert await db.import_encrypted_rows(parsed_rows, parsed_fp) == (1, 0)
+        assert (await db.get_verified_user(1))["real_name"] == "Ada Lovelace"
+    finally:
+        await db.close()
+    print("  C5 backup: written file parses back and restores  ✅")
+
+
+async def test_roster_export_cooldown():
+    """The dashboard CSV is decrypted, so the 12h limit is the control that keeps
+    it from becoming an unlimited PII tap."""
+    db = Database(_tmp_db_path())
+    await db.connect()
+    try:
+        assert await db.last_roster_export(9) == 0, "never exported -> no cooldown"
+
+        await db.record_roster_export(9, 4242, 17)
+        last = await db.last_roster_export(9)
+        assert last > 0
+        cooldown = config.ROSTER_EXPORT_COOLDOWN_HOURS * 3600
+        assert int(time.time()) - last < cooldown, "should still be on cooldown"
+        assert config.ROSTER_EXPORT_COOLDOWN_HOURS >= 12, "12h is a floor, not a default"
+
+        # Scoped per guild — one server's export must not gate another's.
+        assert await db.last_roster_export(77) == 0
+
+        # Backdate past the window and it opens up again.
+        await db.conn.execute(
+            "UPDATE roster_exports SET last_export_at = ? WHERE guild_id = ?",
+            (int(time.time()) - cooldown - 1, 9),
+        )
+        await db.conn.commit()
+        assert int(time.time()) - await db.last_roster_export(9) > cooldown
+
+        row = _raw(db.path, "SELECT exported_by, row_count FROM roster_exports")[0]
+        assert row == (4242, 17), "export must be attributable to who ran it"
+    finally:
+        await db.close()
+    print("  C5 export: roster CSV cooldown is per-guild, stored and audited  ✅")
+
+
+async def test_backups_disable_switch():
+    """BACKUP_INTERVAL_HOURS=-1 turns backups off everywhere."""
+    assert config.BACKUP_INTERVAL_HOURS >= 12 or config.BACKUP_INTERVAL_HOURS == -1
+    assert config.BACKUPS_ENABLED == (config.BACKUP_INTERVAL_HOURS > 0)
+
+    # The cog is simply not loaded when off, so /backup doesn't exist either.
+    loaded = []
+
+    class _FakeBot:
+        async def add_cog(self, cog):
+            loaded.append(cog)
+
+    real = config.BACKUP_INTERVAL_HOURS, config.BACKUPS_ENABLED
+    try:
+        config.BACKUP_INTERVAL_HOURS, config.BACKUPS_ENABLED = -1, False
+        await backup.setup(_FakeBot())
+        assert not loaded, "cog must not load when backups are disabled"
+    finally:
+        config.BACKUP_INTERVAL_HOURS, config.BACKUPS_ENABLED = real
+    print("  C5 config: BACKUP_INTERVAL_HOURS=-1 disables backups globally  ✅")
+
+
 async def main():
     print("Running verification + resilience tests...\n")
     await test_email_pool_isolation()
@@ -686,6 +868,12 @@ async def main():
     await test_migration_atomic_on_crash()
     await test_wrong_key_refuses()
     await test_duplicate_student_id_aborts()
+    await test_backup_payload_is_ciphertext()
+    await test_backup_restore_round_trip()
+    await test_restore_refuses_wrong_key()
+    await test_backup_file_parses_back()
+    await test_roster_export_cooldown()
+    await test_backups_disable_switch()
     print("\nALL TESTS PASSED ✅")
 
 

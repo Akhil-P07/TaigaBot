@@ -301,6 +301,27 @@ class Setup(commands.Cog):
             modlog_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
         )
         await self._set_perms(modlog_ch, eboard, view_channel=True, reason="TaigaBot setup")
+        # #taiga-backups: Eboard only — holds this server's encrypted roster
+        # snapshots. The attachments are ciphertext (useless without
+        # ENCRYPTION_KEY), but the channel stays Eboard-only anyway: who is
+        # verified here is itself worth not publishing.
+        #
+        # Skipped entirely when backups are off (BACKUP_INTERVAL_HOURS=-1) so we
+        # don't create a channel nothing will ever post in. An EXISTING one is
+        # still adopted and locked down in that case — it holds old backups, so
+        # it must not fall through to the Verified-visible gating pass below.
+        backups_ch = (
+            await self._ensure_channel(guild, config.BACKUP_CHANNEL_NAME)
+            if config.BACKUPS_ENABLED
+            else gu.backups_channel(guild)
+        )
+        if backups_ch is not None:
+            await self._set_perms(
+                backups_ch, guild.default_role, view_channel=False, reason="TaigaBot setup"
+            )
+            await self._set_perms(
+                backups_ch, eboard, view_channel=True, reason="TaigaBot setup"
+            )
         # #roles: where verified members self-assign interest roles (set up with
         # /reactionrole). Visible + reactable to Verified, but read-only.
         roles_ch = await self._ensure_channel(guild, config.ROLES_CHANNEL_NAME)
@@ -313,29 +334,25 @@ class Setup(commands.Cog):
         )
         # Grant TaigaBot itself access to the channels it posts in — otherwise the
         # @everyone view/send deny above also locks the bot out (it's just an
-        # @everyone member for permissions), breaking welcome/mod-log/roles.
-        for ch in (unverified_ch, welcome_ch, modlog_ch, roles_ch):
+        # @everyone member for permissions), breaking welcome/mod-log/backups/roles.
+        core_channels = [unverified_ch, welcome_ch, modlog_ch, roles_ch]
+        if backups_ch is not None:
+            core_channels.append(backups_ch)
+        for ch in core_channels:
             await self._set_perms(
                 ch, guild.me, view_channel=True, send_messages=True,
                 embed_links=True, attach_files=True, add_reactions=True,
                 read_message_history=True, reason="TaigaBot: bot access to its channels",
             )
         steps.append(
-            f"Channels ready: {unverified_ch.mention}, {welcome_ch.mention}, "
-            f"{modlog_ch.mention}, {roles_ch.mention}"
+            "Channels ready: "
+            + ", ".join(ch.mention for ch in core_channels)
         )
-
-        # The retired backup feature used to keep an Eboard-only #taiga-backups
-        # here, exempt from gating. It is no longer a core channel, so the gating
-        # pass below now treats it like any other: hidden from @everyone but
-        # readable by Verified — and the roster CSVs still sitting in it hold real
-        # names and emails. Say so loudly; deleting it is the Eboard's call.
-        leftover_backups = gu.get_channel(guild, "taiga-backups")
-        if leftover_backups is not None:
+        if backups_ch is not None and not config.BACKUPS_ENABLED:
             steps.append(
-                f"⚠️ {leftover_backups.mention} is left over from the removed backup "
-                "feature and is now visible to **Verified** members. Any roster files "
-                "in it contain members' real names and emails — delete the channel."
+                f"ℹ️ {backups_ch.mention} is kept Eboard-only, but automatic backups "
+                "are switched off (`BACKUP_INTERVAL_HOURS=-1`), so nothing new will "
+                "be posted there."
             )
 
         # 3. Gate every OTHER channel/category behind the Verified role
@@ -343,9 +360,7 @@ class Setup(commands.Cog):
         #    Eboard can. A member with no roles therefore sees nothing until they
         #    verify — safe even if the bot was offline when they joined. Covers
         #    categories and voice channels, not just text.
-        core_ids = {
-            unverified_ch.id, welcome_ch.id, modlog_ch.id, roles_ch.id,
-        }
+        core_ids = {ch.id for ch in core_channels}
         # ignore_ids was built above: env GATING_IGNORE merged with interactive picks
         gated = 0
         ignored = 0

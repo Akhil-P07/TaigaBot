@@ -62,6 +62,10 @@ def modlog_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return get_channel(guild, config.MODLOG_CHANNEL_NAME)
 
 
+def backups_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    return get_channel(guild, config.BACKUP_CHANNEL_NAME)
+
+
 def general_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return get_channel(guild, config.GENERAL_CHANNEL_NAME)
 
