@@ -7,6 +7,8 @@ bot is already in.
 """
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import time
 
@@ -14,6 +16,7 @@ import discord
 from aiohttp import web
 
 import config
+import crypto
 from utils import guildutils as gu
 from utils.checks import member_has_role
 from web.auth import current_user, is_owner, require_login, require_owner
@@ -121,6 +124,7 @@ async def guild_detail(request: web.Request) -> web.Response:
     premium = await bot.db.is_premium(gid)
     row = await bot.db.get_premium(gid)
     subs = await bot.db.get_guild_news_subs(gid)
+    last_export = await bot.db.last_roster_export(gid)
 
     return web.json_response({
         "id": str(guild.id),
@@ -135,6 +139,16 @@ async def guild_detail(request: web.Request) -> web.Response:
                 else config.NEWS_MAX_CUSTOM_FEEDS
             ),
             "customFeedsPremium": config.NEWS_PREMIUM_MAX_CUSTOM_FEEDS,
+        },
+        # Lets the dashboard show the cooldown state before the button is
+        # clicked, rather than only discovering it from a 429.
+        "rosterExport": {
+            "lastExportAt": last_export,
+            "cooldownHours": config.ROSTER_EXPORT_COOLDOWN_HOURS,
+            "availableAt": (
+                last_export + config.ROSTER_EXPORT_COOLDOWN_HOURS * 3600
+                if last_export else 0
+            ),
         },
         "news": [
             {
@@ -153,6 +167,123 @@ async def guild_detail(request: web.Request) -> web.Response:
             for s in subs
         ],
     })
+
+
+# ── roster export ─────────────────────────────────────────────────────────────
+
+@require_login
+async def roster_export(request: web.Request) -> web.Response:
+    """Download this server's verified members as a DECRYPTED CSV.
+
+    The opposite end of features/backup.py: that uploads ciphertext to Discord
+    for disaster recovery, this hands real names and emails to a signed-in
+    Eboard member. So this one is rate-limited per guild
+    (ROSTER_EXPORT_COOLDOWN_HOURS, floored at 12) and every pull is recorded in
+    `roster_exports`.
+
+    POST rather than GET on purpose: it consumes the cooldown and writes an
+    audit row, so it isn't idempotent; POST also picks up csrf_mw (which skips
+    safe methods) and keeps the payload out of history and referrer headers.
+
+    Membership is read from the guild, not from verified_users.guild_id — a
+    member who verified in another server is still this server's member, and
+    their Eboard may see who they are. That is long-standing intentional
+    behaviour, not an oversight.
+    """
+    bot = request.app["bot"]
+    gid = int(request.match_info["guild_id"])
+    uid = request["session"]["user_id"]
+
+    # Re-checked here rather than trusted from the list call — the guild id comes
+    # from the URL and a client can put anything there.
+    if not any(g.id == gid for g in manageable_guilds(bot, uid)):
+        return web.json_response({"error": "You don't manage that server."}, status=403)
+
+    guild = bot.get_guild(gid)
+    if guild is None:
+        return web.json_response({"error": "Server not found."}, status=404)
+
+    cooldown = config.ROSTER_EXPORT_COOLDOWN_HOURS * 3600
+    last = await bot.db.last_roster_export(gid)
+    elapsed = int(time.time()) - last
+    if last and elapsed < cooldown:
+        retry = cooldown - elapsed
+        return web.json_response(
+            {
+                "error": (
+                    f"This server's roster was exported {retry_phrase(elapsed)} ago. "
+                    f"Exports are limited to one per {config.ROSTER_EXPORT_COOLDOWN_HOURS} hours."
+                ),
+                "retryAfter": retry,
+                "retryAt": last + cooldown,
+            },
+            status=429,
+            headers={"Retry-After": str(retry)},
+        )
+
+    # The members intent is on, so the cache is normally complete; fall back to
+    # the API only when it clearly isn't (a very large or freshly joined guild).
+    members = guild.members
+    if len(members) < (guild.member_count or 0):
+        members = [m async for m in guild.fetch_members(limit=None)]
+
+    verified_role = config.VERIFIED_ROLE_NAME.lower()
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow([
+        "display_name", "username", "user_id",
+        "verified_in_db", "real_name", "email", "verified_at", "note",
+    ])
+
+    count = 0
+    for m in sorted(members, key=lambda m: m.display_name.lower()):
+        if m.bot:
+            continue
+        # Verified members only — admins are already visible in Discord.
+        if not any(r.name.lower() == verified_role for r in m.roles):
+            continue
+        note = ""
+        try:
+            info = await bot.db.get_verified_user(m.id)
+        except crypto.DecryptionError:
+            # One unreadable row must not sink the whole export. Flag it instead
+            # of dropping the member silently — a blank name here is a real
+            # problem somebody needs to see.
+            log.exception("Roster export: undecryptable row for user %s.", m.id)
+            info, note = None, "decrypt_error"
+        writer.writerow([
+            m.display_name, str(m), m.id, info is not None,
+            info["real_name"] if info else "",
+            info["email"] if info else "",
+            info["verified_at"] if info else "",
+            note,
+        ])
+        count += 1
+
+    await bot.db.record_roster_export(gid, uid, count)
+    log.info(
+        "Roster export: guild %s (%s), %d member(s), by user %s.",
+        gid, guild.name, count, uid,
+    )
+
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    return web.Response(
+        body=buf.getvalue().encode("utf-8"),
+        content_type="text/csv",
+        charset="utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="roster-{gid}-{ts}.csv"',
+            # security_headers_mw already sets Cache-Control: no-store on /api/*.
+            "X-Roster-Count": str(count),
+        },
+    )
+
+
+def retry_phrase(seconds: int) -> str:
+    """'3 hours' / '12 minutes' — for the 429 message only."""
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)} minute(s)"
+    return f"{seconds // 3600} hour(s)"
 
 
 # ── premium (owner only) ──────────────────────────────────────────────────────
@@ -572,6 +703,7 @@ def add_routes(app: web.Application) -> None:
     app.router.add_get("/api/guilds", my_guilds)
     app.router.add_get("/api/guilds/{guild_id:\\d+}", guild_detail)
     app.router.add_post("/api/guilds/{guild_id:\\d+}/eject", guild_eject)
+    app.router.add_post("/api/guilds/{guild_id:\\d+}/roster/export", roster_export)
 
     app.router.add_get("/api/servers", servers_list)
     app.router.add_post("/api/bans", ban_add)

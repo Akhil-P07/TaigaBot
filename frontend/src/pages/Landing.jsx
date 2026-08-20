@@ -4,12 +4,12 @@ import { Alert, Page } from '../components/Layout.jsx'
 import { useAuth } from '../auth.jsx'
 
 const FEATURES = [
-  ['✅ Verification', 'RIT-email OTP keeps your server students-only. Verify once, recognized across every server running the bot, and recover your status on a new account with /recover.'],
-  ['🛡️ Moderation', 'Automod with spam auto-warns, an on-device ML phishing filter, and a contact/solicitation filter — plus kick, ban, timeout and warn tools, and a deleted-message audit log.'],
+  ['✅ Verification', 'An RIT-email one-time code keeps your server students-only. Verify once and you are recognized across every server running the bot, and you can move your status to a new account with /recover.'],
+  ['🛡️ Moderation', 'Automod covers spam auto-warns, an on-device ML phishing filter, and a contact/solicitation filter, plus kick, ban, timeout, and warn tools and a deleted-message audit log.'],
   ['📊 Leveling', 'Members earn XP for chatting, with /rank and a per-server leaderboard.'],
   ['🗂️ Projects', 'Spin up gated project channels with roles and a request-to-join approval flow.'],
   ['🤖 AI Assistant', 'Ask questions right in chat with /ask, powered by Google Gemini.'],
-  ['📰 News feeds', 'Follow any news site or blog with /news — OpenAI and Anthropic are one click, or paste any RSS/Atom URL. New articles land in the channel you pick, automatically.'],
+  ['📰 News feeds', 'Follow any news site or blog with /news. OpenAI and Anthropic are one click away, or paste any RSS/Atom URL. New articles land automatically in the channel you pick.'],
 ]
 
 // The OAuth callback bounces failures back here with ?error=…, so they can be
@@ -50,7 +50,7 @@ export default function Landing() {
         <img src="/assets/TaigaBot.png" alt="TaigaBot" />
         <h1>TaigaBot</h1>
         <p className="tag">
-          Verification, moderation, projects and news feeds for RIT Discord servers.
+          Verification, moderation, projects, and news feeds for RIT Discord servers.
         </p>
         <div className="actions">
           {user?.authenticated ? (

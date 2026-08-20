@@ -1,28 +1,44 @@
-"""Off-box, per-guild member-roster backups — guards against host filesystem wipes.
+"""Off-box, per-guild roster backups — guards against host filesystem wipes.
 
 A normal crash, restart, or sleep never loses data: SQLite commits to disk on
 every write, so the file is intact when the bot wakes up. The real risk is the
-host (e.g. a free Replit/Render container) being rebuilt from scratch, which
-wipes the file entirely. This feature periodically uploads a CSV roster of the
-guild's current verified members to an Eboard-only Discord channel, so the
-membership record survives even a full container reset.
+host (a free Railway/Render container) being rebuilt from scratch, which wipes
+the file entirely. This feature periodically uploads each guild's verified_users
+rows to an Eboard-only Discord channel, so the membership record survives a full
+container reset. restore_roster.py is the way back in.
 
-Each backup is a CSV of the guild's current members who hold the Verified role
-(admins are omitted — they're already visible in Discord), with each member's
-verified real name and email regardless of which server they verified in —
-the roster's job is to tell this server's Eboard who its members really are.
+What goes in the file
+---------------------
+CIPHERTEXT. The name/email/username columns are uploaded exactly as they sit in
+the database — AES-256-GCM envelopes that are worthless without ENCRYPTION_KEY.
+That is the whole reason this feature could come back: an earlier version wrote
+cleartext rosters to Discord and was deleted for it.
 
-An earlier version also attached a per-guild `.db` snapshot for full restores,
-but it leaked cross-server data (the levels table is global, so every server's
-backup carried every user's XP and ids) — removed; don't reintroduce a raw DB
-export without auditing every table it copies.
+What does NOT go in the file: anything outside verified_users. `levels`,
+`warnings`, `tickets`, `premium_guilds` and `banned_guilds` are global or owner
+tables, so putting a raw .db snapshot in a guild's channel would hand every
+server a copy of every other server's data. That mistake has been made here once
+already — don't reintroduce a raw DB export without auditing every table it
+copies.
 
-/setup creates the Eboard-only backup channel (named BACKUP_CHANNEL_NAME) in
-each server.
+Two consequences worth knowing:
+  * The backup is only as good as the key. Lose ENCRYPTION_KEY and these files
+    are permanently undecryptable — they protect against a wiped disk, not
+    against a lost key.
+  * Rows are scoped by guild_id (where the member ran /verify), so the union of
+    every guild's file is the whole table exactly once. Rows belonging to a
+    guild the bot has left are in nobody's backup; the loop logs a warning when
+    it notices any.
+
+/setup creates the Eboard-only backup channel (named BACKUP_CHANNEL_NAME).
+
+Set BACKUP_INTERVAL_HOURS=-1 to switch backups off across every server: this cog
+is then never loaded, so neither the periodic upload nor /backup exists.
 """
 from __future__ import annotations
 
 import csv
+import io
 import logging
 import os
 import tempfile
@@ -33,50 +49,53 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
+import crypto
+from database import ENCRYPTED_EXPORT_COLUMNS
 from utils import guildutils as gu
 from utils.checks import is_eboard
 
 log = logging.getLogger("taigabot.backup")
 
+# Bump when the columns or the header change, so a future restore_roster.py can
+# tell old files apart instead of guessing at them.
+BACKUP_FORMAT = "taigabot-roster v1"
+
+# Restore reads these back off the `#` header lines.
+META_PREFIX = "#"
+
+
+def render_backup_csv(rows: list[dict], guild_id: int, fingerprint: str, ts: str) -> str:
+    """The backup file's exact text. Split out so tests can assert on it without
+    a Discord guild or the filesystem."""
+    buf = io.StringIO()
+    buf.write(f"{META_PREFIX} {BACKUP_FORMAT}  guild={guild_id}  generated={ts}\n")
+    buf.write(f"{META_PREFIX} key_fingerprint={fingerprint}  rows={len(rows)}\n")
+    buf.write(
+        f"{META_PREFIX} Encrypted. Restore with the SAME ENCRYPTION_KEY:"
+        " python restore_roster.py <file>\n"
+    )
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(ENCRYPTED_EXPORT_COLUMNS)
+    for r in rows:
+        writer.writerow([r[c] for c in ENCRYPTED_EXPORT_COLUMNS])
+    return buf.getvalue()
+
 
 async def build_guild_backup(db, guild: discord.Guild):
-    """Create this guild's backup files. Returns (files, roster_count).
+    """Create this guild's backup file. Returns (files, row_count).
 
     `files` is a list of (temp_path, upload_filename); the caller sends them and
-    then deletes the temp paths. It contains a CSV roster of the guild's current
-    verified members.
-
-    A current member is rostered if they hold the Verified role. Admins are
-    omitted (they're already visible in Discord). Members who verified on another
-    server still appear WITH their real name/email (joining here auto-grants
-    them the Verified role) — intentional: any server's Eboard may see who its
-    verified members are.
+    then deletes the temp paths.
     """
     ts = time.strftime("%Y%m%d-%H%M%S")
-    verified_role = config.VERIFIED_ROLE_NAME.lower()
-    roster_path = os.path.join(tempfile.gettempdir(), f"roster-{guild.id}-{ts}.csv")
-    count = 0
-    with open(roster_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "display_name", "username", "user_id",
-            "verified_in_db", "real_name", "email",
-        ])
-        async for m in guild.fetch_members(limit=None):
-            if m.bot:
-                continue
-            has_role = any(r.name.lower() == verified_role for r in m.roles)
-            if not has_role:  # verified members only — admins are already visible in Discord
-                continue
-            info = await db.get_verified_user(m.id)  # fill name/email if on record
-            writer.writerow([
-                m.display_name, str(m), m.id, info is not None,
-                info["real_name"] if info else "",
-                info["email"] if info else "",
-            ])
-            count += 1
+    rows = await db.export_encrypted_rows(guild.id)
+    text = render_backup_csv(rows, guild.id, crypto.load().fingerprint, ts)
 
-    return [(roster_path, f"roster-{guild.id}-{ts}.csv")], count
+    name = f"roster-{guild.id}-{ts}.csv"
+    path = os.path.join(tempfile.gettempdir(), name)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        f.write(text)
+    return [(path, name)], len(rows)
 
 
 class Backup(commands.Cog):
@@ -99,8 +118,8 @@ class Backup(commands.Cog):
         return gu.backups_channel(guild)
 
     async def _backup_guild(self, guild: discord.Guild) -> int | None:
-        """Build this guild's verified-member roster and upload it to its backup
-        channel. Returns the roster count, or None if there's no backup channel."""
+        """Upload this guild's encrypted roster. Returns the row count, or None
+        if there's no usable backup channel."""
         channel = self._channel_for(guild)
         if channel is None:
             return None
@@ -116,11 +135,13 @@ class Backup(commands.Cog):
         files_meta, count = await build_guild_backup(self.bot.db, guild)
         try:
             files = [discord.File(p, filename=n) for p, n in files_meta]
-            ts = time.strftime("%Y%m%d-%H%M%S")
             await channel.send(
                 content=(
-                    f"🗄️ Backup for **{guild.name}** — {ts} "
-                    f"(roster of {count} verified member(s))"
+                    f"🗄️ Encrypted roster backup for **{guild.name}** — "
+                    f"{count} verified member(s).\n"
+                    "🔒 Names and emails in this file are **encrypted**; it is unreadable "
+                    "without the bot's `ENCRYPTION_KEY`. Keep it here — if the bot's "
+                    "database is ever lost, an admin restores the roster from this file."
                 ),
                 files=files,
             )
@@ -141,14 +162,31 @@ class Backup(commands.Cog):
     @tasks.loop(hours=12)  # real interval set from config in __init__
     async def auto_backup(self) -> None:
         backed_up = 0
+        covered = 0
         for guild in self.bot.guilds:
             try:
-                if await self._backup_guild(guild) is not None:
-                    backed_up += 1
+                count = await self._backup_guild(guild)
             except Exception:  # noqa: BLE001
                 log.exception("Automatic backup failed for guild %s.", guild.id)
+                continue
+            if count is not None:
+                backed_up += 1
+                covered += count
+
+        # Rows scoped to a guild the bot is no longer in land in no backup at
+        # all. Nothing here can fix that (there's no channel left to post to),
+        # but silently under-backing-up the roster is the kind of thing you only
+        # discover during a restore, so say it out loud on every pass.
+        total = await self.bot.db.count_all_verified()
+        if covered < total:
+            log.warning(
+                "%d verified row(s) are not covered by any backup — they belong to "
+                "guild(s) TaigaBot has left. Only %d of %d rows were uploaded.",
+                total - covered, covered, total,
+            )
+
         if backed_up:
-            log.info("Uploaded per-guild backups for %d guild(s).", backed_up)
+            log.info("Uploaded encrypted roster backups for %d guild(s).", backed_up)
         else:
             log.info(
                 "No backup channels yet (run /setup to create #%s); skipping.",
@@ -161,7 +199,7 @@ class Backup(commands.Cog):
 
     @app_commands.command(
         name="backup",
-        description="Back up THIS server's member roster to its backup channel now (Eboard only).",
+        description="Back up THIS server's encrypted roster to its backup channel now (Eboard only).",
     )
     @is_eboard()
     async def backup_now(self, interaction: discord.Interaction) -> None:
@@ -186,11 +224,24 @@ class Backup(commands.Cog):
             )
             return
         await interaction.followup.send(
-            f"✅ Backed up **{guild.name}**'s verified-member roster to "
+            f"✅ Backed up **{guild.name}**'s encrypted roster to "
             f"{self._channel_for(guild).mention} ({count} member(s)).",
             ephemeral=True,
         )
 
 
 async def setup(bot: commands.Bot) -> None:
+    # BACKUP_INTERVAL_HOURS=-1 is the global off switch. Skipping add_cog is the
+    # honest way to honour it: no periodic upload, and no /backup command either,
+    # rather than a command that exists and then refuses. Nothing else in the bot
+    # imports this cog, so nothing breaks by its absence.
+    if not config.BACKUPS_ENABLED:
+        log.warning(
+            "Roster backups are DISABLED (BACKUP_INTERVAL_HOURS=%s). Nothing is "
+            "being uploaded to #%s in any server — if this host's disk is wiped, "
+            "the verified-member roster is gone. Set a positive number of hours "
+            "to turn them back on.",
+            config.BACKUP_INTERVAL_HOURS, config.BACKUP_CHANNEL_NAME,
+        )
+        return
     await bot.add_cog(Backup(bot))

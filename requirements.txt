@@ -5,6 +5,9 @@ discord.py==2.7.1
 aiosqlite==0.22.1
 python-dotenv==1.2.2
 aiohttp==3.14.0
+# AES-256-GCM for the PII columns in verified_users (crypto.py). Ships as a
+# prebuilt wheel with a bundled Rust extension — no compiler needed on Railway.
+cryptography==50.0.0
 
 # Phishing/scam automod filter (utils/phishing.py) adds NO runtime dependency:
 # the model is a small JSON of token weights scored in pure Python. Retraining

@@ -18,6 +18,7 @@ import discord
 from discord.ext import commands
 
 import config
+import crypto
 import personality
 from database import Database
 from web.server import start_web
@@ -174,6 +175,15 @@ async def main() -> None:
         log.warning("CONFIG: %s", p)
     if not config.DISCORD_TOKEN:
         log.error("No DISCORD_TOKEN set. Copy .env.example to .env and fill it in.")
+        return
+    # Checked here, before anything opens the database, so a bad key exits
+    # cleanly instead of throwing out of setup_hook. Whether the key is the RIGHT
+    # one is a question only the database can answer — Database.connect() raises
+    # EncryptionKeyMismatch for that.
+    try:
+        crypto.load()
+    except crypto.MissingKey as e:
+        log.error("%s", e)
         return
     await start_web(bot)  # serves the React dashboard, the JSON API, and /health
     async with bot:

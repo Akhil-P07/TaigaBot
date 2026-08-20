@@ -86,9 +86,8 @@ function Terms({ contact }) {
         <li>Admins who add the bot are responsible for telling their members that
           verification stores a real name and university email (see the{' '}
           <Link to="/privacy">Privacy Policy</Link>).</li>
-        <li>Backup rosters and moderation logs contain personal data — admins must keep
-          the <code>#taiga-backups</code> and <code>#mod-log</code> channels restricted to
-          Eboard.</li>
+        <li>Moderation logs contain personal data — admins must keep the{' '}
+          <code>#mod-log</code> channel restricted to Eboard.</li>
       </ul>
 
       <h2>5. Premium servers</h2>
@@ -210,7 +209,7 @@ function Privacy({ contact }) {
           sent to Google's Gemini API to generate the answer. Don't put personal
           information in prompts.</li>
         <li><strong>Discord</strong> — the bot runs on Discord; everything it posts
-          (mod-log entries, backup rosters, replies) lives in Discord channels and is
+          (mod-log entries, replies) lives in Discord channels and is
           subject to <a href="https://discord.com/privacy">Discord's privacy policy</a>.
           Signing in to this site also involves Discord's OAuth service.</li>
         <li><strong>News sources</strong> — the news watcher fetches public feeds (for
@@ -225,11 +224,9 @@ function Privacy({ contact }) {
           public project info.</li>
         <li>
           <strong>Eboard / admins of each server</strong> can look up the verified name
-          and email of that server's members (<code>/whois</code>), see that server's
-          warnings, the mod-log, and the periodic <strong>backup roster</strong> — a CSV
-          of the server's current verified members' names and emails, posted to the
-          Eboard-only <code>#taiga-backups</code> channel so membership survives a hosting
-          wipe. If you verified on one server and joined another, that server's Eboard can
+          and email of that server's members (<code>/whois</code>), and see that server's
+          warnings and mod-log.
+          If you verified on one server and joined another, that server's Eboard can
           see your name and email too — verified membership is intentionally visible to
           the leadership of every server you join.
         </li>

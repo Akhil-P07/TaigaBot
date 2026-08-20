@@ -4,7 +4,7 @@ import { useMeta } from '../useMeta.js'
 
 const STEPS = [
   ['Invite the bot', 'Use the invite button above. It requests exactly the permissions TaigaBot needs, and never Administrator.'],
-  ['Run /setup', 'As the server owner or an administrator, run /setup. A panel appears where you can exclude channels or categories from gating and toggle role reset (read the warning below). It then creates the Verified, Unverified and Eboard roles, the #unverified, #welcome, #mod-log, #taiga-backups and #roles channels, and gates the rest of the server behind verification.'],
+  ['Run /setup', 'As the server owner or an administrator, run /setup. A panel appears where you can exclude channels or categories from gating and toggle role reset (read the warning below). It then creates the Verified, Unverified and Eboard roles, the #unverified, #welcome, #mod-log and #roles channels, and gates the rest of the server behind verification.'],
   ['Check the Eboard role', 'Give your officers the Eboard role. Every moderation and configuration command is gated behind it.'],
   ['Verify yourself', 'Post in #unverified and follow the OTP prompt to confirm the email flow works end to end.'],
 ]
@@ -80,13 +80,15 @@ const FAQS = [
   ['Which channels must stay private?', (
     <>
       <p>
-        <code>#mod-log</code> and <code>#taiga-backups</code>. <code>/setup</code>{' '}
-        restricts them to Eboard, and it should stay that way.
+        <code>#mod-log</code>. <code>/setup</code> restricts it to Eboard, and it
+        should stay that way.
       </p>
       <p>
-        The backup roster is a CSV of your verified members' real names and email
-        addresses, and the mod log can contain deleted message content. Both are
-        personal data; see the <Link to="/privacy">Privacy Policy</Link>.
+        The mod log can contain deleted message content, which is personal data; see
+        the <Link to="/privacy">Privacy Policy</Link>. If your server still has a{' '}
+        <code>#taiga-backups</code> channel from the bot's removed backup feature,
+        delete it — it holds a CSV of your members' real names and email addresses,
+        and it is no longer kept Eboard-only.
       </p>
     </>
   )],
@@ -150,17 +152,16 @@ export default function Setup() {
       </ol>
 
       <div className="notice warn" style={{ marginTop: 8 }}>
-        <h4>⚠️ Keep #mod-log and #taiga-backups Eboard-only</h4>
+        <h4>⚠️ Keep #mod-log Eboard-only</h4>
         <p>
-          <code>/setup</code> restricts both channels to the Eboard role. Open each
-          one's permissions afterwards and confirm it stayed that way, especially if
-          you excluded channels from gating or moved them into another category.
+          <code>/setup</code> restricts the channel to the Eboard role. Open its
+          permissions afterwards and confirm it stayed that way, especially if you
+          excluded channels from gating or moved it into another category.
         </p>
         <p>
-          <code>#taiga-backups</code> receives a CSV of your verified members' real
-          names and email addresses, and <code>#mod-log</code> can contain deleted
-          message content. Anyone who can read those channels can read all of it, so
-          widening them exposes personal data your members gave you for verification.
+          <code>#mod-log</code> can contain deleted message content. Anyone who can
+          read the channel can read all of it, so widening it exposes personal data
+          your members gave you for verification.
         </p>
       </div>
 

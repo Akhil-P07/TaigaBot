@@ -3,6 +3,91 @@ import { Link, useParams } from 'react-router-dom'
 import { api, formatDate, timeAgo } from '../api.js'
 import { Alert, Empty, GuildIcon, Page, Spinner, TierBadge } from '../components/Layout.jsx'
 
+function hoursUntil(then, now) {
+  const mins = Math.max(1, Math.ceil((then - now) / 60))
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'}`
+  const hours = Math.ceil(mins / 60)
+  return `${hours} hour${hours === 1 ? '' : 's'}`
+}
+
+/** Download this server's verified members as a decrypted CSV.
+ *
+ * The file holds real names and RIT emails, so the copy here says so plainly and
+ * the server enforces a cooldown (this component only *shows* it — never trust
+ * the disabled button to be the limit).
+ */
+function RosterExport({ guildId, info }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(0)
+  const [availableAt, setAvailableAt] = useState(info?.availableAt || 0)
+
+  const now = Math.floor(Date.now() / 1000)
+  const onCooldown = availableAt > now
+
+  async function download() {
+    setBusy(true)
+    setError('')
+    try {
+      const { blob, count } = await api.rosterExport(guildId)
+      // Object URLs leak until revoked; do it as soon as the click is consumed.
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `roster-${guildId}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setDone(count)
+      setAvailableAt(now + (info?.cooldownHours || 12) * 3600)
+    } catch (e) {
+      setError(e.message)
+      if (e.retryAt) setAvailableAt(e.retryAt)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <p className="muted" style={{ marginTop: 0 }}>
+        Exports every member holding the <strong>Verified</strong> role, with the real
+        name and RIT email they verified with. This file is <strong>not</strong>{' '}
+        encrypted — store it like you would the roster itself. Limited to one export
+        every {info?.cooldownHours || 12} hours per server, and each export is logged.
+      </p>
+
+      {error && <Alert kind="error">{error}</Alert>}
+      {done > 0 && !error && (
+        <Alert kind="success">Downloaded {done} member(s).</Alert>
+      )}
+
+      <button
+        className="btn"
+        onClick={download}
+        disabled={busy || onCooldown}
+      >
+        {busy ? 'Preparing…' : 'Export roster (CSV)'}
+      </button>
+
+      {onCooldown && (
+        <p className="muted" style={{ marginBottom: 0 }}>
+          {/* timeAgo() only formats the past — it reads a future timestamp as
+              "just now" — so spell the remaining wait out instead. */}
+          Available again in {hoursUntil(availableAt, now)}, on{' '}
+          {formatDate(availableAt)}.
+        </p>
+      )}
+      {!onCooldown && info?.lastExportAt > 0 && (
+        <p className="muted" style={{ marginBottom: 0 }}>
+          Last exported {timeAgo(info.lastExportAt)}.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function ServerDetail() {
   const { guildId } = useParams()
   const [guild, setGuild] = useState(null)
@@ -98,6 +183,9 @@ export default function ServerDetail() {
           </div>
         ))
       )}
+
+      <h3 style={{ marginTop: 32 }}>Member roster</h3>
+      <RosterExport guildId={guildId} info={guild.rosterExport} />
 
       <div style={{ marginTop: 28 }}>
         <Link className="btn secondary" to="/tickets">Need help? Open a ticket</Link>

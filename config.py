@@ -88,14 +88,45 @@ RESET_ROLES_ON_SETUP: bool = _flag("RESET_ROLES_ON_SETUP", "0")
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH: str = _get("DB_PATH", "taigabot.db")
 
+# ── Encryption at rest ───────────────────────────────────────────────────────
+# Encrypts every verified member's real name, RIT email and Discord username in
+# the database, so a leaked .db file is useless without this key. Generate once:
+#     python -c "import secrets; print(secrets.token_hex(32))"
+# Treat it like the bot token, but with one extra rule: LOSING IT IS PERMANENT.
+# There is no recovery path — the names and emails are simply gone. Deliberately
+# NOT derived from DISCORD_TOKEN: Discord force-rotates tokens it finds in public
+# repos, and that would silently destroy every record.
+ENCRYPTION_KEY: str = _get("ENCRYPTION_KEY")
+
 # ── Backups ──────────────────────────────────────────────────────────────────
-# /setup auto-creates an Eboard-only channel named BACKUP_CHANNEL_NAME and the
-# bot uploads verified-member rosters there. BACKUP_CHANNEL_ID is an optional
-# override to point backups at a specific channel by ID instead of by name.
+# /setup auto-creates an Eboard-only channel named BACKUP_CHANNEL_NAME and the bot
+# periodically uploads that guild's verified_users rows there — as CIPHERTEXT, so
+# the attachment is worthless to anyone without ENCRYPTION_KEY. It exists to
+# survive a host filesystem wipe; see restore_roster.py for the way back in.
+# BACKUP_CHANNEL_ID is an optional override to point backups at a specific channel
+# by ID instead of by name.
 BACKUP_CHANNEL_ID: int | None = (
     int(_get("BACKUP_CHANNEL_ID")) if _get("BACKUP_CHANNEL_ID").isdigit() else None
 )
-BACKUP_INTERVAL_HOURS: int = int(_get("BACKUP_INTERVAL_HOURS", "12"))
+# Set to -1 (any negative) to turn backups OFF everywhere: the cog isn't loaded at
+# all, so neither the periodic upload nor the /backup command exists in any server.
+# Otherwise floored at 12 rather than merely defaulted — a shorter interval buys
+# nothing (the roster changes slowly) and just fills the channel with near-identical
+# files. Note that 0 is not "off": it would be an infinitely tight loop, so it
+# floors to 12 like any other under-12 value. Use -1.
+_backup_interval_raw: int = int(_get("BACKUP_INTERVAL_HOURS", "12") or 12)
+BACKUP_INTERVAL_HOURS: int = (
+    -1 if _backup_interval_raw < 0 else max(12, _backup_interval_raw)
+)
+BACKUPS_ENABLED: bool = BACKUP_INTERVAL_HOURS > 0
+
+# Cooldown between dashboard roster exports, per guild. That download is
+# DECRYPTED — real names and emails in the clear — so unlike the backup above it
+# is rate-limited and recorded (see verified_users exports in `roster_exports`).
+# Also floored at 12: the limit is the point, so it must not be configurable away.
+ROSTER_EXPORT_COOLDOWN_HOURS: int = max(
+    12, int(_get("ROSTER_EXPORT_COOLDOWN_HOURS", "12") or 12)
+)
 
 # ── Gemini AI assistant (/ask) ───────────────────────────────────────────────
 # Free Gemini API key from https://aistudio.google.com/apikey . Leave blank to
@@ -152,6 +183,11 @@ def validate() -> list[str]:
     problems = []
     if not DISCORD_TOKEN:
         problems.append("DISCORD_TOKEN is not set.")
+    if not ENCRYPTION_KEY:
+        problems.append(
+            "ENCRYPTION_KEY is not set — required to read or write verified members. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
     if not BREVO_API_KEY:
         problems.append("BREVO_API_KEY not set — email verification will fail.")
     if not EMAIL_FROM:

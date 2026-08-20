@@ -28,6 +28,27 @@ export const api = {
   guilds: () => request('/api/guilds'),
   guild: (id) => request(`/api/guilds/${id}`),
 
+  // Not routed through request(): the response body is CSV, not JSON, and the
+  // 429 carries retryAfter that the caller needs. Returns a Blob to download.
+  rosterExport: async (guildId) => {
+    const res = await fetch(`/api/guilds/${guildId}/roster/export`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    })
+    if (!res.ok) {
+      let data = {}
+      try { data = JSON.parse(await res.text()) } catch { /* non-JSON error body */ }
+      const err = new Error(data.error || `Export failed (${res.status})`)
+      err.status = res.status
+      err.retryAt = data.retryAt || 0
+      throw err
+    }
+    return {
+      blob: await res.blob(),
+      count: Number(res.headers.get('X-Roster-Count') || 0),
+    }
+  },
+
   premiumList: () => request('/api/premium'),
   premiumGrant: (guildId, days, note) =>
     request('/api/premium', { method: 'POST', body: { guildId, days, note } }),
