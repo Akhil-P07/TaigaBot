@@ -63,6 +63,14 @@ BACKUP_FORMAT = "taigabot-roster v1"
 # Restore reads these back off the `#` header lines.
 META_PREFIX = "#"
 
+# Rate limit for the manual /backup command. utils.cooldowns.spam_cooldown is no
+# use here: it exempts Eboard and admins, and /backup is Eboard-only, so every
+# caller would be exempt. Keyed per-guild rather than per-member because the
+# resource being protected is the guild's backup channel — two Eboard members
+# taking turns shouldn't double the upload rate. The periodic upload
+# (BACKUP_INTERVAL_HOURS) is a separate schedule and is unaffected.
+BACKUP_COOLDOWN_SEC = 300.0
+
 
 def render_backup_csv(rows: list[dict], guild_id: int, fingerprint: str, ts: str) -> str:
     """The backup file's exact text. Split out so tests can assert on it without
@@ -201,6 +209,11 @@ class Backup(commands.Cog):
         name="backup",
         description="Back up THIS server's encrypted roster to its backup channel now (Eboard only).",
     )
+    # Order matters: checks run in the order they were registered, and decorators
+    # apply bottom-up, so is_eboard() must stay nearest the function. Otherwise a
+    # non-Eboard member's rejected call would still consume the guild's bucket and
+    # lock out the whole Eboard for five minutes.
+    @app_commands.checks.cooldown(1, BACKUP_COOLDOWN_SEC, key=lambda i: i.guild_id)
     @is_eboard()
     async def backup_now(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
