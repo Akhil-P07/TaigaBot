@@ -105,6 +105,15 @@ class Help(commands.Cog):
                 value=(
                     "`/setup` — *owner/admin only:* create roles/channels & gate the server\n"
                     "`/health` — config & role/channel status"
+                    # Conditional because the backup cog isn't loaded at all when
+                    # BACKUP_INTERVAL_HOURS is negative — listing /backup there
+                    # would advertise a command that doesn't exist.
+                    + (
+                        "\n`/backup` — upload this server's encrypted roster to "
+                        f"#{config.BACKUP_CHANNEL_NAME} now"
+                        if config.BACKUPS_ENABLED
+                        else ""
+                    )
                 ),
                 inline=False,
             )
