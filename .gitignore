@@ -13,6 +13,11 @@
 # same name. Never commit either.
 roster-*.csv
 
+# Local dev tooling. Builds a synthetic database for testing at realistic volume;
+# it generates the fake roster rather than containing one, but it stays out of the
+# repo — it is a local convenience, not part of the deployed bot.
+seed_fake_db.py
+
 # Phishing trainer cache (re-downloaded on demand; the trained model
 # dataset/phishing_model.json IS committed and must NOT be ignored)
 dataset/discord-phishing-scam-detection.csv
