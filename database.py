@@ -135,6 +135,13 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     levels_enabled   INTEGER NOT NULL DEFAULT 1
 );
 
+-- Stores each Discord server's setup type independently.
+CREATE TABLE IF NOT EXISTS server_setup (
+    guild_id    INTEGER PRIMARY KEY,
+    setup_mode  TEXT NOT NULL DEFAULT 'club',
+    course_name TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS banned_words (
     guild_id INTEGER NOT NULL,
     word     TEXT    NOT NULL,
@@ -984,6 +991,49 @@ class Database:
         )
         row = await cur.fetchone()
         return row["c"] if row else 0
+
+    # ── server setup configuration ──────────────────────────
+    async def get_server_setup(self, guild_id: int) -> dict:
+        """Return a server's setup mode and course name."""
+        cur = await self.conn.execute(
+            "SELECT * FROM server_setup WHERE guild_id = ?",
+            (guild_id,),
+        )
+        row = await cur.fetchone()
+
+        if row is None:
+            return {
+                "guild_id": guild_id,
+                "setup_mode": "club",
+                "course_name": "",
+            }
+
+        return dict(row)
+
+
+    async def set_server_setup(
+        self, guild_id: int, setup_mode: str, course_name: str = ""
+    ) -> None:
+        """Save a server's setup configuration."""
+        if setup_mode not in ("club", "classroom"):
+            raise ValueError("Setup mode must be 'club' or 'classroom'.")
+
+        if setup_mode == "club":
+            course_name = ""
+        elif not course_name.strip():
+            raise ValueError("Classroom mode requires a course name.")
+
+        async with self._tx():
+            await self.conn.execute(
+                """
+                INSERT INTO server_setup (guild_id, setup_mode, course_name)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    setup_mode = excluded.setup_mode,
+                    course_name = excluded.course_name
+                """,
+                (guild_id, setup_mode, course_name.strip()),
+            )
 
     # ── guild settings (automod) ──────────────────────────────────────────
     async def get_settings(self, guild_id: int) -> dict:
